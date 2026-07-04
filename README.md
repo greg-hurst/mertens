@@ -1,4 +1,4 @@
-# mertens
+# Möbius μ and Mertens M Computations
 
 This repository was used to first compute
 
