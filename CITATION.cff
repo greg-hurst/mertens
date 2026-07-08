@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the paper and this repository."
+title: "mertens"
+type: software
+authors:
+  - family-names: "Hurst"
+    given-names: "Greg"
+repository-code: "https://github.com/greg-hurst/mertens"
+license: "MIT"
+abstract: "Software for practical computation of the Mertens function, including isolated-value implementations and a standalone segmented Möbius/Mertens sieve."
+preferred-citation:
+  type: article
+  authors:
+    - family-names: "Hurst"
+      given-names: "Greg"
+  title: "Practical computations of the Mertens function: M(10^24) and M(10^25)"
+  year: 2026
+  url: "https://arxiv.org/abs/XXXX.XXXXX"
