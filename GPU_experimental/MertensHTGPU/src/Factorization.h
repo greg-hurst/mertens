@@ -187,10 +187,15 @@ static inline void fillFactBlock(
                         sqfprod[j] *= p;
                         tabla[j] *= p;
                     }
-                    for (ulong d = p * p; d <= (ulong)(n + m - 1); d *= p) {
+                    // Guard before multiplying: for p > 2^{64/3}, d *= p wraps
+                    // mod 2^64 and a wrapped value can land back below n+m-1,
+                    // stamping spurious factors (this corrupted M(1e23)).
+                    for (ulong d = p * p, roof = (ulong)(n + m - 1); d <= roof; ) {
                         j0 = (n == 0) ? d : ((n + d - 1) / d) * d - n;
                         for (long j = j0; j < m; j += d)
                             tabla[j] *= p;
+                        if (d > roof / p) break;
+                        d *= p;
                     }
                 }
         } else {
@@ -281,12 +286,17 @@ static inline void fillFactBlock(
             }
 
             // Higher powers: single pass (large stride, no blocking benefit)
+            // Guard before multiplying: for p > 2^{64/3}, d *= p wraps mod 2^64
+            // and a wrapped value can land back below n+m-1, stamping spurious
+            // factors (this corrupted M(1e23)).
             for (pi = 0; pi < nprimes; pi++) {
                 ulong p = pv[pi];
-                for (ulong d = p * p; d <= (ulong)(n + m - 1); d *= p) {
+                for (ulong d = p * p, roof = (ulong)(n + m - 1); d <= roof; ) {
                     long j0 = (n == 0) ? d : ((n + d - 1) / d) * d - n;
                     for (long j = j0; j < m; j += d)
                         tabla[j] *= p;
+                    if (d > roof / p) break;
+                    d *= p;
                 }
             }
 
