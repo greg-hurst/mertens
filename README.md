@@ -119,7 +119,7 @@ The GPU implementations are not required for the main record computations.
 
 If you use the mathematical results, algorithmic description, or validation from this project, please cite the paper:
 
-> Greg Hurst, *Practical computations of the Mertens function: $M(10^{24})$ and $M(10^{25})$*, arXiv:XXXX.XXXXX, 2026.
+> Greg Hurst, *Practical computations of the Mertens function: $M(10^{24})$ and $M(10^{25})$*, arXiv:2607.07566, 2026.
 
 If you use the code or standalone sieve library, please also cite this repository using the repository's [`CITATION.cff`](CITATION.cff) file.
 
