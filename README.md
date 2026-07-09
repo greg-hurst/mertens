@@ -5,7 +5,7 @@ This repository was used to first compute
 $$M(10^{24}) = 7{,}189{,}337{,}839$$
 $$M(10^{25}) = -258{,}560{,}632{,}948,$$
 
-the current records for the Mertens function $M(n) = \sum_{k=1}^{n} \mu(k)$. The code is high-performance, tuned primarily for Apple Silicon, and accompanies the paper [*Practical computations of the Mertens function: $M(10^{24})$ and $M(10^{25})$*](https://arxiv.org/abs/XXXX.XXXXX).
+the current records for the Mertens function $M(n) = \sum_{k=1}^{n} \mu(k)$. The code is high-performance, tuned primarily for Apple Silicon, and accompanies the paper [*Practical computations of the Mertens function: $M(10^{24})$ and $M(10^{25})$*](https://arxiv.org/abs/2607.07566).
 
 The repository contains two independent implementations of the Mertens function and a shared segmented Möbius/Mertens sieve library. The `sieve/` directory is usable independently of the record computations and provides a standalone segmented Möbius/Mertens sieve for computing $\mu(k)$ and $M(n)$ over intervals.
 
@@ -126,7 +126,7 @@ If you use the code or standalone sieve library, please also cite this repositor
 ## References
 
 - H. A. Helfgott and L. Thompson, [*Summing $\mu(n)$: a faster elementary algorithm*](https://arxiv.org/abs/2101.08773), 2021. The algorithm implemented in [MertensHT](MertensHT/).
-- G. Hurst, [*Practical computations of the Mertens function: $M(10^{24})$ and $M(10^{25})$*](https://arxiv.org/abs/XXXX.XXXXX), 2026. — the paper this repository accompanies.
+- G. Hurst, [*Practical computations of the Mertens function: $M(10^{24})$ and $M(10^{25})$*](https://arxiv.org/abs/2607.07566), 2026. — the paper this repository accompanies.
 
 ## License
 

@@ -1,6 +1,6 @@
 # MertensHT
 
-An implementation of the Mertens function $M(n) = \sum_{k=1}^{n} \mu(k)$ using the Helfgott-Thompson $O(n^{3/5})$ combinatorial algorithm ([arXiv:2101.08773](https://arxiv.org/abs/2101.08773)). Tested through $10^{23}$; inputs beyond that are enabled by 256-bit fallbacks (projected timings for $10^{24}$ and $10^{25}$ appear [Hurst 2026](https://arxiv.org/abs/XXXX.XXXXX)]).
+An implementation of the Mertens function $M(n) = \sum_{k=1}^{n} \mu(k)$ using the Helfgott-Thompson $O(n^{3/5})$ combinatorial algorithm ([arXiv:2101.08773](https://arxiv.org/abs/2101.08773)). Tested through $10^{23}$; inputs beyond that are enabled by 256-bit fallbacks (projected timings for $10^{24}$ and $10^{25}$ appear in [Hurst 2026](https://arxiv.org/abs/2607.07566)).
 
 This implementation includes [30 performance optimizations](OPTIMIZATIONS.md) over the [original author code](https://arxiv.org/src/2101.08773v4/anc) (the ancillary files of the arXiv submission), running **3.4x-4.5x faster** across $10^{16}$ to $10^{23}$ on the record machine.
 

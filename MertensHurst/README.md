@@ -1,6 +1,6 @@
 # MertensHurst
 
-A high-performance implementation of the Mertens function $M(n) = \sum_{k=1}^{n} \mu(k)$, using the classical $O(n^{2/3})$ combinatorial algorithm ([Hurst 2026](https://arxiv.org/abs/XXXX.XXXXX)). Computes $M(n)$ for values up to $10^{25}$.
+A high-performance implementation of the Mertens function $M(n) = \sum_{k=1}^{n} \mu(k)$, using the classical $O(n^{2/3})$ combinatorial algorithm ([Hurst 2026](https://arxiv.org/abs/2607.07566)). Computes $M(n)$ for values up to $10^{25}$.
 
 This code was used to set the record for computing the Mertens function.
 
