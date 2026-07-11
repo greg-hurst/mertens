@@ -21,6 +21,7 @@
 #include "QuotientCache.h"
 #include "QuotientPredictor.h"
 #include <algorithm>
+#include <cmath>
 #include <type_traits>
 
 // ============================================================================
