@@ -21,10 +21,13 @@ Linux builds with the same `make`. On Windows use WSL (see the top-level README)
 
 ```
 make        # build the binary
+make q2     # build the original all-Q2 reference binary
 make clean  # remove build artifacts
 ```
 
-The binary is placed in `build/`.
+The normal binary, `build/mertens`, uses exact outer-$Q=6$ transforms for both
+$S_1$ and $S_2$. The reference target produces `build/mertens_q2`; it is slower
+but computes the same result through the original all-$Q=2$ path.
 
 ### Division-free mode
 
@@ -95,8 +98,12 @@ COMPILE_FLAGS.md            What each build flag does
 src/
   MertensHurst.h            Public API: Int64 MertensHurst(UInt128 n)
   MertensHurst.cpp          Algorithm orchestration (loops, back substitution)
-  S2.h                      S2 summation functions (64-bit and 128-bit)
   S1.h                      S1 summation functions (64-bit and 128-bit)
+  S1Q6.h                    Exact outer-Q6 S1 transform kernels
+  S2.h                      S2 summation functions (64-bit and 128-bit)
+  S2Q6.h                    Exact outer-Q6 S2 dispatch
+  S2Q6Modes.h               Static outer-Q6 S2 coefficient modes
+  OuterRecovery.h           Square-free back substitution
   QuotientPredictor.h       Division-free quotient estimation
   main.cpp                  Driver program
 ../sieve/                   Shared segmented Mobius sieve (see sieve/README.md)

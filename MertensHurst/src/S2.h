@@ -64,12 +64,61 @@ static inline T S2_term(T q) {
     }
 }
 
+template<int Mode>
+struct S2LegacyModeEvaluator {
+    template<typename T>
+    static inline T eval(T q) { return S2_term<Mode>(q); }
+};
+
+// ============================================================================
+// Current Q_o=2 / Q_i=6 interval dispatcher.
+//
+// This owns only interval construction. The callback receives a compile-time
+// mode tag plus an inclusive interval; the wheel iterator and mode evaluator
+// remain separate. Keeping the mode in the type preserves the fully
+// specialized kernels used before this refactor.
+// ============================================================================
+
+template<int Mode>
+using S2ModeTag = std::integral_constant<int, Mode>;
+
+template<bool Half, typename Callback>
+static inline void dispatch_S2_current(
+    UInt64 x1,
+    UInt64 x2,
+    UInt64 nu,
+    UInt64 nu2,
+    Callback&& callback
+) {
+    auto interval = [&](auto mode, UInt64 lo, UInt64 hi) {
+        lo = std::max(x1, lo);
+        hi = std::min(x2, hi);
+        if (lo <= hi) callback(mode, lo, hi);
+    };
+
+    if constexpr (Half) {
+        interval(S2ModeTag<9>{}, 0,                (nu2 >> 1) / 3);
+        interval(S2ModeTag<8>{}, (nu2 >> 1) / 3+1,(nu  >> 1) / 3);
+        interval(S2ModeTag<7>{}, (nu  >> 1) / 3+1, nu2 / 3);
+        interval(S2ModeTag<6>{},  nu2 / 3 + 1,     nu / 3);
+        interval(S2ModeTag<3>{},  nu / 3 + 1,      nu2 >> 1);
+        interval(S2ModeTag<2>{}, (nu2 >> 1) + 1,   nu >> 1);
+        interval(S2ModeTag<1>{}, (nu  >> 1) + 1,   nu2);
+        interval(S2ModeTag<0>{},  nu2 + 1,          ~UInt64(0));
+    } else {
+        interval(S2ModeTag<5>{}, 0,               (nu >> 1) / 3);
+        interval(S2ModeTag<4>{}, (nu >> 1) / 3+1,  nu / 3);
+        interval(S2ModeTag<1>{},  nu / 3 + 1,      nu >> 1);
+        interval(S2ModeTag<0>{}, (nu >> 1) + 1,   ~UInt64(0));
+    }
+}
+
 // ============================================================================
 // 128-bit S2: small/division range (odd k coprime to 6)
 // ============================================================================
 
-template<int Mode>
-static inline void sum_small_range_S2_128(
+template<typename Evaluator>
+static inline void sum_small_range_S2_128_eval(
     const UInt128& n,
     const Int8* __restrict Mu,
     UInt64 L1,
@@ -83,7 +132,9 @@ static inline void sum_small_range_S2_128(
     i += (i % 6 == 3) ? 2 : 0;
 
     if (i <= to && i % 6 == 5) {
-        sum += Mu[i - L1] * S2_term<Mode>(static_cast<Int128>(n / i));
+        sum += Mu[i - L1] * Evaluator::template eval<Int128>(
+            static_cast<Int128>(n / i)
+        );
         i += 2;
     }
 
@@ -99,7 +150,7 @@ static inline void sum_small_range_S2_128(
             const Int8 m = Mu[j + (off)]; \
             if (__builtin_expect(m != 0, true)) { \
                 const Int128 q = static_cast<Int128>(n / (i + (off))); \
-                sum += static_cast<Int128>(m) * S2_term<Mode>(q); \
+                sum += static_cast<Int128>(m) * Evaluator::template eval<Int128>(q); \
             } \
         } while (0)
 
@@ -118,7 +169,7 @@ static inline void sum_small_range_S2_128(
             const Int8 m = Mu[i - L1];
             if (__builtin_expect(m != 0, true)) {
                 const Int128 q = static_cast<Int128>(n / i);
-                sum += static_cast<Int128>(m) * S2_term<Mode>(q);
+                sum += static_cast<Int128>(m) * Evaluator::template eval<Int128>(q);
             }
         }
     }
@@ -128,8 +179,8 @@ static inline void sum_small_range_S2_128(
 // 128-bit S2: fast/predictor range (odd k coprime to 6, division-free)
 // ============================================================================
 
-template<int Mode>
-static inline void sum_fast_range_S2_128(
+template<typename Evaluator>
+static inline void sum_fast_range_S2_128_eval(
     const UInt128& n,
     const Int8* __restrict Mu,
     UInt64 start,
@@ -155,7 +206,7 @@ static inline void sum_fast_range_S2_128(
 
     const Int8 m = Mu[x - start];
     if (m) {
-        const Int64 t = S2_term<Mode>(static_cast<Int64>(qCur));
+        const Int64 t = Evaluator::template eval<Int64>(static_cast<Int64>(qCur));
         sum += static_cast<Int64>(m) * t;
     }
 
@@ -166,7 +217,7 @@ static inline void sum_fast_range_S2_128(
         if (x <= to) {
             Int8 m = Mu[x - start];
             if (m) {
-                Int64 t = S2_term<Mode>(static_cast<Int64>(qEst));
+                Int64 t = Evaluator::template eval<Int64>(static_cast<Int64>(qEst));
                 sum += static_cast<Int64>(m) * t;
             }
         }
@@ -179,7 +230,7 @@ static inline void sum_fast_range_S2_128(
         {
             Int8 m = Mu[x - start];
             if (m) {
-                Int64 t = S2_term<Mode>(static_cast<Int64>(qEst));
+                Int64 t = Evaluator::template eval<Int64>(static_cast<Int64>(qEst));
                 sum += static_cast<Int64>(m) * t;
             }
         }
@@ -190,7 +241,7 @@ static inline void sum_fast_range_S2_128(
         {
             Int8 m = Mu[x - start];
             if (m) {
-                Int64 t = S2_term<Mode>(static_cast<Int64>(qEst));
+                Int64 t = Evaluator::template eval<Int64>(static_cast<Int64>(qEst));
                 sum += static_cast<Int64>(m) * t;
             }
         }
@@ -203,7 +254,7 @@ static inline void sum_fast_range_S2_128(
         if (x % 6 != 3) {
             Int8 m = Mu[x - start];
             if (m) {
-                Int64 t = S2_term<Mode>(static_cast<Int64>(qCur));
+                Int64 t = Evaluator::template eval<Int64>(static_cast<Int64>(qCur));
                 sum += static_cast<Int64>(m) * t;
             }
         }
@@ -214,8 +265,8 @@ static inline void sum_fast_range_S2_128(
 // 128-bit S2: dispatcher combining small + fast ranges
 // ============================================================================
 
-template<int Mode>
-static inline void update_S2_128_impl(
+template<typename Evaluator>
+static inline void update_S2_128_wheel6(
     UInt128 n,
     UInt64 L1,
     UInt64 lo,
@@ -238,10 +289,25 @@ static inline void update_S2_128_impl(
     UInt64 fastFrom = std::max(lo, cbrt2nCeil + 1);
 
     if (lo <= smallTo)
-        sum_small_range_S2_128<Mode>(n, Mu, L1, lo, smallTo, sum);
+        sum_small_range_S2_128_eval<Evaluator>(n, Mu, L1, lo, smallTo, sum);
 
     if (fastFrom <= hi)
-        sum_fast_range_S2_128<Mode>(n, Mu, L1, fastFrom, hi, sum);
+        sum_fast_range_S2_128_eval<Evaluator>(n, Mu, L1, fastFrom, hi, sum);
+}
+
+template<int Mode>
+static inline void update_S2_128_impl(
+    UInt128 n,
+    UInt64 L1,
+    UInt64 lo,
+    UInt64 hi,
+    const Int8* __restrict Mu,
+    const UInt64& cbrt2nCeil,
+    Int128& sum
+) {
+    update_S2_128_wheel6<S2LegacyModeEvaluator<Mode>>(
+        n, L1, lo, hi, Mu, cbrt2nCeil, sum
+    );
 }
 
 // ============================================================================
@@ -270,95 +336,24 @@ static inline Int128 update_S2_128(
     const long double dn = (long double)n;
     const UInt64 cbrt2nCeil = (UInt64)ceill(cbrtl(2.001L * dn));
 
-    // The range gets split into sub-ranges by which floor-quotient terms
-    // survive. As k passes nu/6, nu/3, nu/2, etc., terms like floor(q/6)
-    // fall outside [1, nu] and drop out — higher modes have fewer terms.
-    // See the S2_term table above for what survives in each mode.
-    if constexpr (Half) {
-
-        {
-            const UInt64 hi = std::min(x2, (nu2 >> 1)/3);
-            update_S2_128_impl<9>(n, L1, x1, hi, Mu, cbrt2nCeil, sum);
-        }
-
-        {
-            const UInt64 lo = std::max(x1, (nu2 >> 1)/3 + 1);
-            const UInt64 hi = std::min(x2, (nu >> 1)/3);
-            update_S2_128_impl<8>(n, L1, lo, hi, Mu, cbrt2nCeil, sum);
-        }
-
-        {
-            const UInt64 lo = std::max(x1, (nu >> 1)/3 + 1);
-            const UInt64 hi = std::min(x2, nu2/3);
-            update_S2_128_impl<7>(n, L1, lo, hi, Mu, cbrt2nCeil, sum);
-        }
-
-        {
-            const UInt64 lo = std::max(x1, nu2/3 + 1);
-            const UInt64 hi = std::min(x2, nu/3);
-            update_S2_128_impl<6>(n, L1, lo, hi, Mu, cbrt2nCeil, sum);
-        }
-
-        {
-            const UInt64 lo = std::max(x1, nu/3 + 1);
-            const UInt64 hi = std::min(x2, nu2 >> 1);
-            update_S2_128_impl<3>(n, L1, lo, hi, Mu, cbrt2nCeil, sum);
-        }
-
-        {
-            const UInt64 lo = std::max(x1, (nu2 >> 1) + 1);
-            const UInt64 hi = std::min(x2, nu >> 1);
-            update_S2_128_impl<2>(n, L1, lo, hi, Mu, cbrt2nCeil, sum);
-        }
-
-        {
-            const UInt64 lo = std::max(x1, (nu >> 1) + 1);
-            const UInt64 hi = std::min(x2, nu2);
-            update_S2_128_impl<1>(n, L1, lo, hi, Mu, cbrt2nCeil, sum);
-        }
-
-        {
-            const UInt64 lo = std::max(x1, nu2 + 1);
-            update_S2_128_impl<0>(n, L1, lo, x2, Mu, cbrt2nCeil, sum);
-        }
-
-        return sum;
-    } else {
-
-        {
-            const UInt64 hi = std::min(x2, (nu >> 1)/3);
-            update_S2_128_impl<5>(n, L1, x1, hi, Mu, cbrt2nCeil, sum);
-        }
-
-        {
-            const UInt64 lo = std::max(x1, (nu >> 1)/3 + 1);
-            const UInt64 hi = std::min(x2, nu/3);
-            update_S2_128_impl<4>(n, L1, lo, hi, Mu, cbrt2nCeil, sum);
-        }
-
-        {
-            const UInt64 lo = std::max(x1, nu/3 + 1);
-            const UInt64 hi = std::min(x2, nu >> 1);
-            update_S2_128_impl<1>(n, L1, lo, hi, Mu, cbrt2nCeil, sum);
-        }
-
-        {
-            const UInt64 lo = std::max(x1, (nu >> 1) + 1);
-            update_S2_128_impl<0>(n, L1, lo, x2, Mu, cbrt2nCeil, sum);
-        }
-
-        return sum;
-    }
+    dispatch_S2_current<Half>(x1, x2, nu, nu2,
+        [&](auto mode, UInt64 lo, UInt64 hi) {
+            constexpr int Mode = decltype(mode)::value;
+            update_S2_128_impl<Mode>(
+                n, L1, lo, hi, Mu, cbrt2nCeil, sum
+            );
+        });
+    return sum;
 }
 
 // ============================================================================
 // 64-bit S2: inner implementation (single mode)
 // ============================================================================
 
-template<int Mode>
-static inline Int64 update_S2_impl(UInt64 n, UInt64 L1, UInt64 x1, UInt64 x2,
-                                   const Int8* __restrict Mu,
-                                   const QuotientCache& qCache, UInt64 dCAP) {
+template<typename Evaluator>
+static inline Int64 update_S2_wheel6(UInt64 n, UInt64 L1, UInt64 x1, UInt64 x2,
+                                     const Int8* __restrict Mu,
+                                     const QuotientCache& qCache, UInt64 dCAP) {
     if (x1 > x2) return 0;
 
     Int64 res = 0;
@@ -384,7 +379,7 @@ static inline Int64 update_S2_impl(UInt64 n, UInt64 L1, UInt64 x1, UInt64 x2,
         };
 
         if (i <= x2 && i % 6 == 5) {
-            res += Mu[i - L1] * S2_term<Mode>(cdiv(i));
+            res += Mu[i - L1] * Evaluator::template eval<Int64>(cdiv(i));
             i += 2;
         }
 
@@ -398,18 +393,18 @@ static inline Int64 update_S2_impl(UInt64 n, UInt64 L1, UInt64 x1, UInt64 x2,
             for (; i <= cacheXcap; i += 36) {
                 const UInt64 j = i - L1;
 
-                res += Mu[j +  0] * S2_term<Mode>(cquo(i +  0))
-                    +  Mu[j +  4] * S2_term<Mode>(cquo(i +  4))
-                    +  Mu[j +  6] * S2_term<Mode>(cquo(i +  6))
-                    +  Mu[j + 10] * S2_term<Mode>(cquo(i + 10))
-                    +  Mu[j + 12] * S2_term<Mode>(cquo(i + 12))
-                    +  Mu[j + 16] * S2_term<Mode>(cquo(i + 16))
-                    +  Mu[j + 18] * S2_term<Mode>(cquo(i + 18))
-                    +  Mu[j + 22] * S2_term<Mode>(cquo(i + 22))
-                    +  Mu[j + 24] * S2_term<Mode>(cquo(i + 24))
-                    +  Mu[j + 28] * S2_term<Mode>(cquo(i + 28))
-                    +  Mu[j + 30] * S2_term<Mode>(cquo(i + 30))
-                    +  Mu[j + 34] * S2_term<Mode>(cquo(i + 34));
+                res += Mu[j +  0] * Evaluator::template eval<Int64>(cquo(i +  0))
+                    +  Mu[j +  4] * Evaluator::template eval<Int64>(cquo(i +  4))
+                    +  Mu[j +  6] * Evaluator::template eval<Int64>(cquo(i +  6))
+                    +  Mu[j + 10] * Evaluator::template eval<Int64>(cquo(i + 10))
+                    +  Mu[j + 12] * Evaluator::template eval<Int64>(cquo(i + 12))
+                    +  Mu[j + 16] * Evaluator::template eval<Int64>(cquo(i + 16))
+                    +  Mu[j + 18] * Evaluator::template eval<Int64>(cquo(i + 18))
+                    +  Mu[j + 22] * Evaluator::template eval<Int64>(cquo(i + 22))
+                    +  Mu[j + 24] * Evaluator::template eval<Int64>(cquo(i + 24))
+                    +  Mu[j + 28] * Evaluator::template eval<Int64>(cquo(i + 28))
+                    +  Mu[j + 30] * Evaluator::template eval<Int64>(cquo(i + 30))
+                    +  Mu[j + 34] * Evaluator::template eval<Int64>(cquo(i + 34));
             }
 
             // Division region: beyond cache range
@@ -417,17 +412,17 @@ static inline Int64 update_S2_impl(UInt64 n, UInt64 L1, UInt64 x1, UInt64 x2,
             for (; i <= xcap; i += 36) {
                 const UInt64 j = i - L1;
 
-                res += Mu[j +  0] * S2_term<Mode>(sdiv(i +  0)) + Mu[j +  4] * S2_term<Mode>(sdiv(i +  4))
-                    +  Mu[j +  6] * S2_term<Mode>(sdiv(i +  6)) + Mu[j + 10] * S2_term<Mode>(sdiv(i + 10))
-                    +  Mu[j + 12] * S2_term<Mode>(sdiv(i + 12)) + Mu[j + 16] * S2_term<Mode>(sdiv(i + 16))
-                    +  Mu[j + 18] * S2_term<Mode>(sdiv(i + 18)) + Mu[j + 22] * S2_term<Mode>(sdiv(i + 22))
-                    +  Mu[j + 24] * S2_term<Mode>(sdiv(i + 24)) + Mu[j + 28] * S2_term<Mode>(sdiv(i + 28))
-                    +  Mu[j + 30] * S2_term<Mode>(sdiv(i + 30)) + Mu[j + 34] * S2_term<Mode>(sdiv(i + 34));
+                res += Mu[j +  0] * Evaluator::template eval<Int64>(sdiv(i +  0)) + Mu[j +  4] * Evaluator::template eval<Int64>(sdiv(i +  4))
+                    +  Mu[j +  6] * Evaluator::template eval<Int64>(sdiv(i +  6)) + Mu[j + 10] * Evaluator::template eval<Int64>(sdiv(i + 10))
+                    +  Mu[j + 12] * Evaluator::template eval<Int64>(sdiv(i + 12)) + Mu[j + 16] * Evaluator::template eval<Int64>(sdiv(i + 16))
+                    +  Mu[j + 18] * Evaluator::template eval<Int64>(sdiv(i + 18)) + Mu[j + 22] * Evaluator::template eval<Int64>(sdiv(i + 22))
+                    +  Mu[j + 24] * Evaluator::template eval<Int64>(sdiv(i + 24)) + Mu[j + 28] * Evaluator::template eval<Int64>(sdiv(i + 28))
+                    +  Mu[j + 30] * Evaluator::template eval<Int64>(sdiv(i + 30)) + Mu[j + 34] * Evaluator::template eval<Int64>(sdiv(i + 34));
             }
 
             // Tail
             for (; i <= x2; i += (6 - 2*(i % 3))) {
-                res += Mu[i - L1] * S2_term<Mode>(cdiv(i));
+                res += Mu[i - L1] * Evaluator::template eval<Int64>(cdiv(i));
             }
         }
 
@@ -437,7 +432,7 @@ static inline Int64 update_S2_impl(UInt64 n, UInt64 L1, UInt64 x1, UInt64 x2,
     } else {
         // Direct division path
         if (i <= x2 && i % 6 == 5) {
-            res += Mu[i - L1] * S2_term<Mode>(sdiv(i));
+            res += Mu[i - L1] * Evaluator::template eval<Int64>(sdiv(i));
             i += 2;
         }
 
@@ -448,21 +443,30 @@ static inline Int64 update_S2_impl(UInt64 n, UInt64 L1, UInt64 x1, UInt64 x2,
         for (; i <= xcap; i += 36) {
             const UInt64 j = i - L1;
 
-            res += Mu[j +  0] * S2_term<Mode>(sdiv(i +  0)) + Mu[j +  4] * S2_term<Mode>(sdiv(i +  4))
-                +  Mu[j +  6] * S2_term<Mode>(sdiv(i +  6)) + Mu[j + 10] * S2_term<Mode>(sdiv(i + 10))
-                +  Mu[j + 12] * S2_term<Mode>(sdiv(i + 12)) + Mu[j + 16] * S2_term<Mode>(sdiv(i + 16))
-                +  Mu[j + 18] * S2_term<Mode>(sdiv(i + 18)) + Mu[j + 22] * S2_term<Mode>(sdiv(i + 22))
-                +  Mu[j + 24] * S2_term<Mode>(sdiv(i + 24)) + Mu[j + 28] * S2_term<Mode>(sdiv(i + 28))
-                +  Mu[j + 30] * S2_term<Mode>(sdiv(i + 30)) + Mu[j + 34] * S2_term<Mode>(sdiv(i + 34));
+            res += Mu[j +  0] * Evaluator::template eval<Int64>(sdiv(i +  0)) + Mu[j +  4] * Evaluator::template eval<Int64>(sdiv(i +  4))
+                +  Mu[j +  6] * Evaluator::template eval<Int64>(sdiv(i +  6)) + Mu[j + 10] * Evaluator::template eval<Int64>(sdiv(i + 10))
+                +  Mu[j + 12] * Evaluator::template eval<Int64>(sdiv(i + 12)) + Mu[j + 16] * Evaluator::template eval<Int64>(sdiv(i + 16))
+                +  Mu[j + 18] * Evaluator::template eval<Int64>(sdiv(i + 18)) + Mu[j + 22] * Evaluator::template eval<Int64>(sdiv(i + 22))
+                +  Mu[j + 24] * Evaluator::template eval<Int64>(sdiv(i + 24)) + Mu[j + 28] * Evaluator::template eval<Int64>(sdiv(i + 28))
+                +  Mu[j + 30] * Evaluator::template eval<Int64>(sdiv(i + 30)) + Mu[j + 34] * Evaluator::template eval<Int64>(sdiv(i + 34));
         }
 
         // Tail
         for (; i <= x2; i += (6 - 2*(i % 3))) {
-            res += Mu[i - L1] * S2_term<Mode>(sdiv(i));
+            res += Mu[i - L1] * Evaluator::template eval<Int64>(sdiv(i));
         }
     }
 
     return res;
+}
+
+template<int Mode>
+static inline Int64 update_S2_impl(UInt64 n, UInt64 L1, UInt64 x1, UInt64 x2,
+                                   const Int8* __restrict Mu,
+                                   const QuotientCache& qCache, UInt64 dCAP) {
+    return update_S2_wheel6<S2LegacyModeEvaluator<Mode>>(
+        n, L1, x1, x2, Mu, qCache, dCAP
+    );
 }
 
 // ============================================================================
@@ -473,81 +477,13 @@ template <bool Half>
 static inline Int64 update_S2(UInt64 n, UInt64 L1, UInt64 x1, UInt64 x2,
                        const Int8* __restrict Mu, UInt64 nu, UInt64 nu2,
                        const QuotientCache& qCache, UInt64 dCAP) {
-    if constexpr (Half) {
-        Int64 s = 0;
-
-        {
-            const UInt64 hi = std::min(x2, (nu2 >> 1)/3);
-            s += update_S2_impl<9>(n, L1, x1, hi, Mu, qCache, dCAP);
-        }
-
-        {
-            const UInt64 lo = std::max(x1, (nu2 >> 1)/3 + 1);
-            const UInt64 hi = std::min(x2, (nu >> 1)/3);
-            s += update_S2_impl<8>(n, L1, lo, hi, Mu, qCache, dCAP);
-        }
-
-        {
-            const UInt64 lo = std::max(x1, (nu >> 1)/3 + 1);
-            const UInt64 hi = std::min(x2, nu2/3);
-            s += update_S2_impl<7>(n, L1, lo, hi, Mu, qCache, dCAP);
-        }
-
-        {
-            const UInt64 lo = std::max(x1, nu2/3 + 1);
-            const UInt64 hi = std::min(x2, nu/3);
-            s += update_S2_impl<6>(n, L1, lo, hi, Mu, qCache, dCAP);
-        }
-
-        {
-            const UInt64 lo = std::max(x1, nu/3 + 1);
-            const UInt64 hi = std::min(x2, nu2 >> 1);
-            s += update_S2_impl<3>(n, L1, lo, hi, Mu, qCache, dCAP);
-        }
-
-        {
-            const UInt64 lo = std::max(x1, (nu2 >> 1) + 1);
-            const UInt64 hi = std::min(x2, nu >> 1);
-            s += update_S2_impl<2>(n, L1, lo, hi, Mu, qCache, dCAP);
-        }
-
-        {
-            const UInt64 lo = std::max(x1, (nu >> 1) + 1);
-            const UInt64 hi = std::min(x2, nu2);
-            s += update_S2_impl<1>(n, L1, lo, hi, Mu, qCache, dCAP);
-        }
-
-        {
-            const UInt64 lo = std::max(x1, nu2 + 1);
-            s += update_S2_impl<0>(n, L1, lo, x2, Mu, qCache, dCAP);
-        }
-
-        return s;
-    } else {
-        Int64 s = 0;
-
-        {
-            const UInt64 hi = std::min(x2, (nu >> 1)/3);
-            s += update_S2_impl<5>(n, L1, x1, hi, Mu, qCache, dCAP);
-        }
-
-        {
-            const UInt64 lo = std::max(x1, (nu >> 1)/3 + 1);
-            const UInt64 hi = std::min(x2, nu/3);
-            s += update_S2_impl<4>(n, L1, lo, hi, Mu, qCache, dCAP);
-        }
-
-        {
-            const UInt64 lo = std::max(x1, nu/3 + 1);
-            const UInt64 hi = std::min(x2, nu >> 1);
-            s += update_S2_impl<1>(n, L1, lo, hi, Mu, qCache, dCAP);
-        }
-
-        {
-            const UInt64 lo = std::max(x1, (nu >> 1) + 1);
-            s += update_S2_impl<0>(n, L1, lo, x2, Mu, qCache, dCAP);
-        }
-
-        return s;
-    }
+    Int64 sum = 0;
+    dispatch_S2_current<Half>(x1, x2, nu, nu2,
+        [&](auto mode, UInt64 lo, UInt64 hi) {
+            constexpr int Mode = decltype(mode)::value;
+            sum += update_S2_impl<Mode>(
+                n, L1, lo, hi, Mu, qCache, dCAP
+            );
+        });
+    return sum;
 }

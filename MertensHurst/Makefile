@@ -27,6 +27,11 @@ SIEVE_BUCKET_NARROW_ENTRY ?= 1
 # a separate in-cache pass). Bit-identical M. Override with: make FUSED_FINALIZE=0
 FUSED_FINALIZE ?= 1
 
+# --- Inclusion-exclusion transform (default: outer Q=6 for S1 and S2) ---
+# `make q2` builds the original all-Q=2 implementation as a reference.
+S1_OUTER_Q6 ?= 1
+S2_OUTER_Q6 ?= 1
+
 # --- Base flags (all platforms) ---
 CXXFLAGS := -O3 -std=c++17 \
             -I../sieve \
@@ -37,10 +42,16 @@ CXXFLAGS := -O3 -std=c++17 \
             -DUSE_DIVISION_FREE=$(DIVISION_FREE) \
             -DUSE_BUCKET_SIEVE=$(BUCKET_SIEVE) \
             -DSIEVE_NARROW_ENTRY=$(SIEVE_BUCKET_NARROW_ENTRY) \
-            -DSIEVE_FUSED_FINALIZE=$(FUSED_FINALIZE)
+            -DSIEVE_FUSED_FINALIZE=$(FUSED_FINALIZE) \
+            -DMERTENSHURST_S1_OUTER_Q6=$(S1_OUTER_Q6) \
+            -DMERTENSHURST_S2_OUTER_Q6=$(S2_OUTER_Q6)
 
 # Extra defines, e.g. make EXTRA_CXXFLAGS="-DSIEVE_LP_SIZE=1024 -DSIEVE_STRIDE_LOG=7"
 CXXFLAGS += $(EXTRA_CXXFLAGS)
+Q2_CXXFLAGS = $(filter-out -DMERTENSHURST_S1_OUTER_Q6=% \
+                            -DMERTENSHURST_S2_OUTER_Q6=%,$(CXXFLAGS)) \
+              -DMERTENSHURST_S1_OUTER_Q6=0 \
+              -DMERTENSHURST_S2_OUTER_Q6=0
 LDFLAGS  :=
 
 # --- Platform-specific: OpenMP ---
@@ -58,13 +69,19 @@ BUILDDIR = build
 SIEVEDIR = ../sieve
 SRCS     = $(SRCDIR)/MertensHurst.cpp $(SIEVEDIR)/SegmentedMobiusSieve.cpp $(SRCDIR)/main.cpp
 
-.PHONY: all clean
+.PHONY: all q2 clean
 
 all: $(BUILDDIR)/mertens
+
+q2: $(BUILDDIR)/mertens_q2
 
 $(BUILDDIR)/mertens: $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
 	@mkdir -p $(BUILDDIR)
 	$(CXX) $(CXXFLAGS) $(SRCS) -o $@ $(LDFLAGS)
+
+$(BUILDDIR)/mertens_q2: $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
+	@mkdir -p $(BUILDDIR)
+	$(CXX) $(Q2_CXXFLAGS) $(SRCS) -o $@ $(LDFLAGS)
 
 clean:
 	rm -rf $(BUILDDIR)
