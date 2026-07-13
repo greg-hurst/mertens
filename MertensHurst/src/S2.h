@@ -11,7 +11,8 @@
 //
 // The 128-bit path further splits into:
 //   - "small" range (k <= cbrt(2n)): uses actual 128-bit division
-//   - "fast" range  (k > cbrt(2n)):  uses the quotient predictor (division-free)
+//   - transition range: uses the alternating +4/+2 quotient predictor
+//   - far range: uses two independent fixed-residue step-6 predictors
 //
 // Both paths exploit the 10-mode S2_term system to skip vanishing terms,
 // and iterate only over odd k coprime to 6 (since mu(k)=0 for even k and k≡3 mod 6).
@@ -262,6 +263,68 @@ static inline void sum_fast_range_S2_128_eval(
 }
 
 // ============================================================================
+// 128-bit S2: fixed-residue step-6 predictor range
+// ============================================================================
+
+template<typename Evaluator, UInt64 Residue>
+static inline void sum_fast_range_S2_128_step6_residue_eval(
+    const UInt128& n,
+    const Int8* __restrict Mu,
+    UInt64 start,
+    UInt64 from,
+    UInt64 to,
+    Int128& sum
+) {
+    static_assert(Residue == 1 || Residue == 5, "invalid wheel-6 residue");
+    UInt64 x = from + (Residue + 6 - from % 6) % 6;
+    if (x > to) return;
+
+    UInt64 qPrev = static_cast<UInt64>(n / (x - 6));
+    UInt64 qCur = static_cast<UInt64>(n / x);
+    UInt64 qEst = 0;
+
+    const Int8 firstMu = Mu[x - start];
+    if (firstMu != 0) {
+        const Int64 term = Evaluator::template eval<Int64>(
+            static_cast<Int64>(qCur)
+        );
+        sum += static_cast<Int64>(firstMu) * term;
+    }
+
+    while (to - x >= 6) {
+        x += 6;
+        update_quotients_fixed_stride<6, false>(
+            n, x, qCur, qPrev, qEst
+        );
+        const Int8 mu = Mu[x - start];
+        if (mu != 0) {
+            const Int64 term = Evaluator::template eval<Int64>(
+                static_cast<Int64>(qEst)
+            );
+            sum += static_cast<Int64>(mu) * term;
+        }
+    }
+}
+
+template<typename Evaluator>
+static inline void sum_fast_range_S2_128_step6_eval(
+    const UInt128& n,
+    const Int8* __restrict Mu,
+    UInt64 start,
+    UInt64 from,
+    UInt64 to,
+    Int128& sum
+) {
+    if (from > to) return;
+    sum_fast_range_S2_128_step6_residue_eval<Evaluator, 1>(
+        n, Mu, start, from, to, sum
+    );
+    sum_fast_range_S2_128_step6_residue_eval<Evaluator, 5>(
+        n, Mu, start, from, to, sum
+    );
+}
+
+// ============================================================================
 // 128-bit S2: dispatcher combining small + fast ranges
 // ============================================================================
 
@@ -273,6 +336,7 @@ static inline void update_S2_128_wheel6(
     UInt64 hi,
     const Int8* __restrict Mu,
     const UInt64& cbrt2nCeil,
+    const UInt64& step6Boundary,
     Int128& sum
 ) {
     if (lo > hi) return;
@@ -286,13 +350,24 @@ static inline void update_S2_128_wheel6(
     if (lo > hi) return;
 
     const UInt64 smallTo = std::min(hi, cbrt2nCeil);
-    UInt64 fastFrom = std::max(lo, cbrt2nCeil + 1);
+    const UInt64 alternatingFrom = std::max(lo, cbrt2nCeil + 1);
+    const UInt64 alternatingTo = std::min(hi, step6Boundary);
+    const UInt64 step6From = std::max(lo, step6Boundary + 1);
 
     if (lo <= smallTo)
         sum_small_range_S2_128_eval<Evaluator>(n, Mu, L1, lo, smallTo, sum);
 
-    if (fastFrom <= hi)
-        sum_fast_range_S2_128_eval<Evaluator>(n, Mu, L1, fastFrom, hi, sum);
+    if (alternatingFrom <= alternatingTo) {
+        sum_fast_range_S2_128_eval<Evaluator>(
+            n, Mu, L1, alternatingFrom, alternatingTo, sum
+        );
+    }
+
+    if (step6From <= hi) {
+        sum_fast_range_S2_128_step6_eval<Evaluator>(
+            n, Mu, L1, step6From, hi, sum
+        );
+    }
 }
 
 template<int Mode>
@@ -303,10 +378,11 @@ static inline void update_S2_128_impl(
     UInt64 hi,
     const Int8* __restrict Mu,
     const UInt64& cbrt2nCeil,
+    const UInt64& step6Boundary,
     Int128& sum
 ) {
     update_S2_128_wheel6<S2LegacyModeEvaluator<Mode>>(
-        n, L1, lo, hi, Mu, cbrt2nCeil, sum
+        n, L1, lo, hi, Mu, cbrt2nCeil, step6Boundary, sum
     );
 }
 
@@ -335,12 +411,13 @@ static inline Int128 update_S2_128(
 
     const long double dn = (long double)n;
     const UInt64 cbrt2nCeil = (UInt64)ceill(cbrtl(2.001L * dn));
+    const UInt64 step6Boundary = quotient_predictor_first_unit_curvature<6>(n);
 
     dispatch_S2_current<Half>(x1, x2, nu, nu2,
         [&](auto mode, UInt64 lo, UInt64 hi) {
             constexpr int Mode = decltype(mode)::value;
             update_S2_128_impl<Mode>(
-                n, L1, lo, hi, Mu, cbrt2nCeil, sum
+                n, L1, lo, hi, Mu, cbrt2nCeil, step6Boundary, sum
             );
         });
     return sum;

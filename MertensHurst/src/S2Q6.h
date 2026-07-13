@@ -295,13 +295,14 @@ static inline Int128 update_S2_q6_128(
     const UInt64 cbrt2nCeil = static_cast<UInt64>(
         ceill(cbrtl(2.001L * static_cast<long double>(n)))
     );
+    const UInt64 step6Boundary = quotient_predictor_first_unit_curvature<6>(n);
     S2Q6Detail::dispatchExact<Spec>(
         outerClass, x1, x2, nu1, nu2, nu3, nu6,
         [&](auto modeTag, UInt64 lo, UInt64 hi) {
             constexpr typename Spec::Mode Mode = decltype(modeTag)::value;
             using Evaluator = typename Spec::template Evaluator<Mode>;
             update_S2_128_wheel6<Evaluator>(
-                n, L1, lo, hi, Mu, cbrt2nCeil, sum
+                n, L1, lo, hi, Mu, cbrt2nCeil, step6Boundary, sum
             );
         },
         [&](const S2Q6DynamicCoefficients<Spec>& coefficients,

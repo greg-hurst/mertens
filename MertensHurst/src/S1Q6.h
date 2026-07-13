@@ -56,8 +56,22 @@ static constexpr UInt8 MASK_R2_R3_R4    = UInt8((1u << 2) | (1u << 3) | (1u << 4
 template<typename TArg>
 using Accumulator = std::conditional_t<std::is_same_v<TArg, UInt128>, Int128, Int64>;
 
+template<typename TArg>
+static inline UInt64 exactSparseQuotient(
+    const TArg& y,
+    UInt64 denominator,
+    const QuotientCache& qCache,
+    UInt64 dCAP
+) {
+    if constexpr (std::is_same_v<TArg, UInt64> && UseDivisionFree) {
+        if (dCAP != 0 && denominator <= dCAP)
+            return qCache.quotient(y, denominator);
+    }
+    return static_cast<UInt64>(y / denominator);
+}
+
 template<UInt8 Mask, typename TArg, typename MIntT>
-static inline Accumulator<TArg> sumSparseResidues(
+static inline Accumulator<TArg> sumSparseResiduesDirect(
     const TArg& y,
     UInt64 L1,
     UInt64 start,
@@ -72,18 +86,7 @@ static inline Accumulator<TArg> sumSparseResidues(
     if (start > end) return result;
 
     auto addOne = [&](UInt64 denominator) {
-        UInt64 quotient;
-        if constexpr (std::is_same_v<TArg, UInt128>) {
-            quotient = static_cast<UInt64>(y / denominator);
-        } else {
-            if constexpr (UseDivisionFree) {
-                quotient = (dCAP != 0 && denominator <= dCAP)
-                    ? qCache.quotient(y, denominator)
-                    : y / denominator;
-            } else {
-                quotient = y / denominator;
-            }
-        }
+        const UInt64 quotient = exactSparseQuotient(y, denominator, qCache, dCAP);
         result += static_cast<Accumulator<TArg>>(GET_M(M, R, L1, quotient));
     };
 
@@ -116,6 +119,150 @@ static inline Accumulator<TArg> sumSparseResidues(
         addBoundary(denominator);
 
     return result;
+}
+
+template<UInt64 Step, UInt64 Residue, typename TArg, typename MIntT>
+static inline Accumulator<TArg> sumPredictedResidueStream(
+    const TArg& y,
+    UInt64 L1,
+    UInt64 start,
+    UInt64 end,
+    const MIntT* __restrict M,
+    const Int8* __restrict R,
+    const QuotientCache& qCache,
+    UInt64 dCAP,
+    UInt64 firstUnitCurvature
+) {
+    static_assert(Step > 0, "invalid residue-stream stride");
+    static_assert(Residue < Step, "invalid residue-stream class");
+
+    Accumulator<TArg> result = 0;
+    UInt64 denominator = start + (Residue + Step - start % Step) % Step;
+    if (denominator > end) return result;
+
+    UInt64 exactThrough = firstUnitCurvature;
+    if constexpr (std::is_same_v<TArg, UInt64> && UseDivisionFree)
+        exactThrough = std::max(exactThrough, dCAP);
+
+    UInt64 qPrev = 0;
+    bool havePrevious = false;
+    while (denominator <= end && denominator <= exactThrough) {
+        qPrev = exactSparseQuotient(y, denominator, qCache, dCAP);
+        result += static_cast<Accumulator<TArg>>(GET_M(M, R, L1, qPrev));
+        havePrevious = true;
+        if (end - denominator < Step) return result;
+        denominator += Step;
+    }
+
+    if (denominator > end) return result;
+    if (!havePrevious)
+        qPrev = exactSparseQuotient(y, denominator - Step, qCache, dCAP);
+
+    UInt64 qCur = exactSparseQuotient(y, denominator, qCache, dCAP);
+    result += static_cast<Accumulator<TArg>>(GET_M(M, R, L1, qCur));
+
+    UInt64 qEst = 0;
+    while (end - denominator >= Step) {
+        denominator += Step;
+        update_quotients_fixed_stride<Step, false>(
+            y, denominator, qCur, qPrev, qEst
+        );
+        result += static_cast<Accumulator<TArg>>(GET_M(M, R, L1, qEst));
+    }
+
+    return result;
+}
+
+template<UInt64 Step, typename TArg>
+static inline UInt64 sparsePredictorBoundary(
+    const TArg& y,
+    UInt64 start,
+    UInt64 end,
+    UInt64 dCAP
+) {
+    // Short streams do not repay predictor setup, and the division-free
+    // UInt64 backend should consume its already-built quotient cache first.
+    if (end - start < 8 * Step) return 0;
+    if constexpr (std::is_same_v<TArg, UInt64> && UseDivisionFree) {
+        if (end <= dCAP) return 0;
+    }
+
+    // Most active segments lie wholly on one side of the boundary.  These
+    // exact endpoint tests avoid a cube root in both common cases.
+    if (quotient_predictor_has_unit_curvature<Step>(y, start))
+        return start;
+    if (!quotient_predictor_has_unit_curvature<Step>(y, end))
+        return 0;
+
+    return quotient_predictor_first_unit_curvature<Step>(y);
+}
+
+template<UInt8 Mask, typename TArg, typename MIntT>
+static inline Accumulator<TArg> sumSparseResidues(
+    const TArg& y,
+    UInt64 L1,
+    UInt64 start,
+    UInt64 end,
+    const MIntT* __restrict M,
+    const Int8* __restrict R,
+    const QuotientCache& qCache,
+    UInt64 dCAP
+) {
+    static_assert((Mask & ~MASK_ALL) == 0, "invalid residue mask");
+
+    // Direct UInt64 division remains faster on ARM.  UInt128 division and the
+    // x86 division-free backend switch to proved fixed-stride predictors once
+    // the corresponding stream reaches its own unit-curvature boundary.
+    if constexpr (std::is_same_v<TArg, UInt64> && !UseDivisionFree) {
+        return sumSparseResiduesDirect<Mask>(
+            y, L1, start, end, M, R, qCache, dCAP
+        );
+    } else if constexpr (Mask == MASK_MULTIPLE3) {
+        const UInt64 firstUnitCurvature = sparsePredictorBoundary<3>(
+            y, start, end, dCAP
+        );
+        if (firstUnitCurvature == 0)
+            return sumSparseResiduesDirect<Mask>(
+                y, L1, start, end, M, R, qCache, dCAP
+            );
+        return sumPredictedResidueStream<3, 0>(
+            y, L1, start, end, M, R, qCache, dCAP, firstUnitCurvature
+        );
+    } else {
+        const UInt64 firstUnitCurvature = sparsePredictorBoundary<6>(
+            y, start, end, dCAP
+        );
+        if (firstUnitCurvature == 0)
+            return sumSparseResiduesDirect<Mask>(
+                y, L1, start, end, M, R, qCache, dCAP
+            );
+        Accumulator<TArg> result = 0;
+        if constexpr (Mask & (1u << 0))
+            result += sumPredictedResidueStream<6, 0>(
+                y, L1, start, end, M, R, qCache, dCAP, firstUnitCurvature
+            );
+        if constexpr (Mask & (1u << 1))
+            result += sumPredictedResidueStream<6, 1>(
+                y, L1, start, end, M, R, qCache, dCAP, firstUnitCurvature
+            );
+        if constexpr (Mask & (1u << 2))
+            result += sumPredictedResidueStream<6, 2>(
+                y, L1, start, end, M, R, qCache, dCAP, firstUnitCurvature
+            );
+        if constexpr (Mask & (1u << 3))
+            result += sumPredictedResidueStream<6, 3>(
+                y, L1, start, end, M, R, qCache, dCAP, firstUnitCurvature
+            );
+        if constexpr (Mask & (1u << 4))
+            result += sumPredictedResidueStream<6, 4>(
+                y, L1, start, end, M, R, qCache, dCAP, firstUnitCurvature
+            );
+        if constexpr (Mask & (1u << 5))
+            result += sumPredictedResidueStream<6, 5>(
+                y, L1, start, end, M, R, qCache, dCAP, firstUnitCurvature
+            );
+        return result;
+    }
 }
 
 template<UInt8 Mask, typename TArg, typename MIntT>
