@@ -71,6 +71,40 @@ using S2Q6DynamicCoefficients = std::array<Int16, Spec::BasisCount>;
 
 namespace S2Q6Detail {
 
+// Keep each generated mode in a separate kernel so the dispatcher does not
+// become one large inlined function with poor instruction locality.
+template<typename Spec, typename Spec::Mode Mode>
+__attribute__((noinline)) static Int64 updateMode64(
+    UInt64 n,
+    UInt64 L1,
+    UInt64 lo,
+    UInt64 hi,
+    const Int8* __restrict Mu,
+    const QuotientCache& qCache,
+    UInt64 dCAP
+) {
+    using Evaluator = typename Spec::template Evaluator<Mode>;
+    return update_S2_wheel6<Evaluator>(n, L1, lo, hi, Mu, qCache, dCAP);
+}
+
+template<typename Spec, typename Spec::Mode Mode>
+__attribute__((noinline)) static Int128 updateMode128(
+    const UInt128& n,
+    UInt64 L1,
+    UInt64 lo,
+    UInt64 hi,
+    const Int8* __restrict Mu,
+    UInt64 cbrt2nCeil,
+    UInt64 step6Boundary
+) {
+    using Evaluator = typename Spec::template Evaluator<Mode>;
+    Int128 result = 0;
+    update_S2_128_wheel6<Evaluator>(
+        n, L1, lo, hi, Mu, cbrt2nCeil, step6Boundary, result
+    );
+    return result;
+}
+
 static inline UInt64 nuForOuterDivisor(
     UInt64 divisor,
     UInt64 nu1,
@@ -262,8 +296,7 @@ static inline Int64 update_S2_q6(
         outerClass, x1, x2, nu1, nu2, nu3, nu6,
         [&](auto modeTag, UInt64 lo, UInt64 hi) {
             constexpr typename Spec::Mode Mode = decltype(modeTag)::value;
-            using Evaluator = typename Spec::template Evaluator<Mode>;
-            sum += update_S2_wheel6<Evaluator>(
+            sum += S2Q6Detail::updateMode64<Spec, Mode>(
                 n, L1, lo, hi, Mu, qCache, dCAP
             );
         },
@@ -300,9 +333,8 @@ static inline Int128 update_S2_q6_128(
         outerClass, x1, x2, nu1, nu2, nu3, nu6,
         [&](auto modeTag, UInt64 lo, UInt64 hi) {
             constexpr typename Spec::Mode Mode = decltype(modeTag)::value;
-            using Evaluator = typename Spec::template Evaluator<Mode>;
-            update_S2_128_wheel6<Evaluator>(
-                n, L1, lo, hi, Mu, cbrt2nCeil, step6Boundary, sum
+            sum += S2Q6Detail::updateMode128<Spec, Mode>(
+                n, L1, lo, hi, Mu, cbrt2nCeil, step6Boundary
             );
         },
         [&](const S2Q6DynamicCoefficients<Spec>& coefficients,
