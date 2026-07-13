@@ -119,6 +119,12 @@ private:
                                       UInt64 fromIdx, UInt64 toIdx,
                                       const SieveQuotientCache* cache);
 
+    // Apply medium primes while carrying each prime's next-hit offset across
+    // a contiguous run of M2 sub-segments.
+    static void sieveMediumSubSegmentRolling(Int8* mu, const UInt32* primes, UInt64 len,
+                                             UInt64 fromIdx, UInt64 toIdx,
+                                             std::vector<UInt32>& nextOff);
+
     // --- Bucket sieve for large primes ---
     struct LargePrimeHitScheduler {
         // Bucket entry layout (-DSIEVE_NARROW_ENTRY=0|1):
@@ -265,6 +271,8 @@ private:
     static_assert(M2 <= (UInt64(1) << LargePrimeHitScheduler::LP_OFF_BITS),
                   "sub-segment offset must fit in LP_OFF_BITS; raise LP_OFF_BITS if M2 grows");
     static constexpr UInt64 M3 = SIEVE_M3_MULT * STENCIL_PERIOD;   // bucket threshold
+    static constexpr UInt64 BLOCK_SEGMENTS = 128;                  // contiguous M2 work unit
+    static constexpr UInt64 BLOCK_WALK_MIN_SEGMENTS = 4096;        // ~3.6 billion values
     static_assert(M3 > M2, "large primes must exceed the sub-segment length (<= 1 hit per sub-segment)");
     static constexpr UInt64 SMALL_PRIME_CAP = STENCIL_PERIOD;
 

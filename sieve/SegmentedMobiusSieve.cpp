@@ -202,20 +202,6 @@ void SegmentedMobiusSieveCore::sieve(UInt64 lo, UInt64 hi, const std::vector<UIn
     assert(mSqrtPrimeStopIdx <= mSmallPrimeStopIdx ||
            (UInt64)P[mSqrtPrimeStopIdx - 1] <= (LargePrimeHitScheduler::LP_SIZE - 1) * M2);
 
-    // Phase 1: copy stencil + apply SMALL primes (<= SMALL_PRIME_CAP) on M1 chunks
-    #pragma omp parallel for schedule(dynamic, 1)
-    for (UInt64 l = 0; l < len; l += (UInt64)M1) {
-        const UInt64 L = lo + l;
-        const UInt64 H = std::min(lo + l + (UInt64)M1 - 1, hi);
-        const UInt64 n = H - L + 1;
-
-        std::memcpy(MuP + l, mPreMu.data() + stencilOff, sizeof(Int8) * (size_t)n);
-        sieveSmallPrimes(MuP + l, P.data(), L, H);
-    }
-
-    // Squares of all primes >= 359 (index 71+), once per segment.
-    sieveSquaresPass(MuP, P.data(), lo, hi, 71, mSqrtPrimeStopIdx, &mSieveQCache);
-
     UInt32 idxLargeBegin = mSmallPrimeStopIdx;
     if constexpr (UseBucketSieve) {
         while (idxLargeBegin < mSqrtPrimeStopIdx && (UInt64)P[idxLargeBegin] <= M3)
@@ -224,13 +210,163 @@ void SegmentedMobiusSieveCore::sieve(UInt64 lo, UInt64 hi, const std::vector<UIn
         idxLargeBegin = mSqrtPrimeStopIdx;  // treat all primes as medium
     }
 
+    const UInt64 numSeg = (len + M2 - 1) / M2;
+    if (!Finalize || numSeg < BLOCK_WALK_MIN_SEGMENTS) {
+        // MertensHurst finalizes during its prefix scan, so its best locality
+        // is small-prime initialization followed immediately by the medium
+        // pass. Short standalone ranges also stay here because reseeding many
+        // small bucket blocks costs more than rolling offsets save.
+        #pragma omp parallel for schedule(dynamic, 1)
+        for (UInt64 tile = 0; tile < len; tile += M2) {
+            const UInt64 tileEnd = std::min(tile + M2, len);
+            for (UInt64 l = tile; l < tileEnd; l += M1) {
+                const UInt64 L = lo + l;
+                const UInt64 H = std::min(L + M1 - 1, hi);
+                const UInt64 n = H - L + 1;
+                std::memcpy(MuP + l, mPreMu.data() + stencilOff,
+                            sizeof(Int8) * static_cast<size_t>(n));
+                sieveSmallPrimes(MuP + l, P.data(), L, H);
+            }
+
+            if (mSmallPrimeStopIdx < idxLargeBegin) {
+                const UInt64 L = lo + tile;
+                const UInt64 H = std::min(L + M2 - 1, hi);
+                sieveMediumSubSegment(
+                    MuP + tile, P.data(), L, H,
+                    mSmallPrimeStopIdx, idxLargeBegin, &mSieveQCache
+                );
+            }
+        }
+
+        sieveSquaresPass(MuP, P.data(), lo, hi, 71, mSqrtPrimeStopIdx, &mSieveQCache);
+        if (idxLargeBegin < mSqrtPrimeStopIdx) {
+            const UInt64 numSeg = (len + M2 - 1) / M2;
+            const UInt32 numLP = mSqrtPrimeStopIdx - idxLargeBegin;
+            const bool useSerialRouting = numSeg * LP_ROUTE_THRESHOLD >= numLP;
+
+            if (useSerialRouting) {
+                const int nt = omp_get_max_threads();
+                std::vector<UInt64> threadStart(nt + 1);
+                for (int t = 0; t <= nt; ++t) {
+                    threadStart[t] = (numSeg * static_cast<UInt64>(t))
+                                   / static_cast<UInt64>(nt);
+                }
+
+                for (int t = 0; t < nt; ++t) {
+                    auto& buckets = mBuckets[t];
+                    if (buckets.size() < LargePrimeHitScheduler::LP_NBUCKETS)
+                        buckets.resize(LargePrimeHitScheduler::LP_NBUCKETS);
+                    for (auto& bucket : buckets)
+                        bucket.clear();
+                }
+
+                for (UInt32 i = idxLargeBegin; i < mSqrtPrimeStopIdx; ++i) {
+                    const UInt64 p = P[i];
+                    if (p > hi)
+                        break;
+
+                    for (int t = 0; t < nt; ++t) {
+                        const UInt64 threadLo = lo + threadStart[t] * M2;
+                        const UInt64 threadHi = (t + 1 < nt)
+                            ? lo + threadStart[t + 1] * M2 - 1
+                            : hi;
+
+                        UInt64 m;
+                        if constexpr (UseDivisionFree) {
+                            m = p * mSieveQCache.ceilDiv(threadLo, i, p);
+                        } else {
+                            m = p * (((threadLo - 1) / p) + 1);
+                        }
+                        if (m > threadHi)
+                            continue;
+
+                        const UInt64 localSubSeg = (m - threadLo) / M2;
+                        using Scheduler = LargePrimeHitScheduler;
+                        const Scheduler::EntryT entry = Scheduler::packEntry(
+                            static_cast<UInt32>(p), (m - threadLo) - localSubSeg * M2
+                        );
+                        mBuckets[t][Scheduler::ringIndex(localSubSeg, entry)].push_back(entry);
+                    }
+                }
+
+                #pragma omp parallel num_threads(nt)
+                {
+                    const int tid = omp_get_thread_num();
+                    const UInt64 s0 = threadStart[tid];
+                    const UInt64 s1 = threadStart[tid + 1];
+
+                    if (s0 < s1) {
+                        LargePrimeHitScheduler scheduler(
+                            LargePrimeHitScheduler::PrePopulated{},
+                            lo, lo + s0 * M2, std::min(lo + s1 * M2 - 1, hi),
+                            M2, P, idxLargeBegin, mSqrtPrimeStopIdx - 1,
+                            mBuckets[tid], &mSieveQCache
+                        );
+                        for (UInt64 s = s0; s < s1; ++s) {
+                            scheduler.sieveSubSegment(MuP);
+                            if constexpr (Finalize) {
+                                const UInt64 L = lo + s * M2;
+                                finalizeMu(MuP + s * M2, L, std::min(L + M2 - 1, hi));
+                            }
+                        }
+                    }
+                }
+            } else {
+                #pragma omp parallel
+                {
+                    const int tid = omp_get_thread_num();
+                    const int nt = omp_get_num_threads();
+                    const UInt64 s0 = (numSeg * static_cast<UInt64>(tid))
+                                          / static_cast<UInt64>(nt);
+                    const UInt64 s1 = (numSeg * static_cast<UInt64>(tid + 1))
+                                          / static_cast<UInt64>(nt);
+
+                    if (s0 < s1) {
+                        LargePrimeHitScheduler scheduler(
+                            lo, lo + s0 * M2, std::min(lo + s1 * M2 - 1, hi),
+                            M2, P, idxLargeBegin, mSqrtPrimeStopIdx - 1,
+                            mBuckets[tid], &mSieveQCache
+                        );
+                        for (UInt64 s = s0; s < s1; ++s) {
+                            scheduler.sieveSubSegment(MuP);
+                            if constexpr (Finalize) {
+                                const UInt64 L = lo + s * M2;
+                                finalizeMu(MuP + s * M2, L, std::min(L + M2 - 1, hi));
+                            }
+                        }
+                    }
+                }
+            }
+        } else if constexpr (Finalize) {
+            #pragma omp parallel for schedule(dynamic, 1)
+            for (UInt64 l = 0; l < len; l += M2)
+                finalizeMu(MuP + l, lo + l, std::min(lo + l + M2 - 1, hi));
+        }
+        return;
+    }
+
+    // Phase 1: copy stencil + apply small primes on M1 chunks.
+    #pragma omp parallel for schedule(dynamic, 1)
+    for (UInt64 l = 0; l < len; l += M1) {
+        const UInt64 L = lo + l;
+        const UInt64 H = std::min(L + M1 - 1, hi);
+        const UInt64 n = H - L + 1;
+        std::memcpy(MuP + l, mPreMu.data() + stencilOff,
+                    sizeof(Int8) * static_cast<size_t>(n));
+        sieveSmallPrimes(MuP + l, P.data(), L, H);
+    }
+
+    // Zero squareful entries before the contiguous medium/bucket walk. Later
+    // log additions leave them nonnegative, so finalization still maps them
+    // to zero.
+    sieveSquaresPass(MuP, P.data(), lo, hi, 71, mSqrtPrimeStopIdx, &mSieveQCache);
+
     if (idxLargeBegin >= mSqrtPrimeStopIdx) {
-        // Phase 2: medium primes only (no large primes needed)
         if (mSmallPrimeStopIdx < idxLargeBegin) {
             #pragma omp parallel for schedule(dynamic, 1)
             for (UInt64 l = 0; l < len; l += M2) {
                 const UInt64 L = lo + l;
-                const UInt64 H = std::min(lo + l + M2 - 1, hi);
+                const UInt64 H = std::min(L + M2 - 1, hi);
                 sieveMediumSubSegment(MuP + l, P.data(), L, H,
                                       mSmallPrimeStopIdx, idxLargeBegin, &mSieveQCache);
                 if constexpr (Finalize)
@@ -243,132 +379,56 @@ void SegmentedMobiusSieveCore::sieve(UInt64 lo, UInt64 hi, const std::vector<UIn
         }
 
     } else {
+        // Dynamic contiguous blocks keep medium-prime next-hit state hot and
+        // carry each large-prime scheduler only across the range it owns.
+        const UInt64 targetBlocks = 2 * static_cast<UInt64>(omp_get_max_threads());
+        const UInt64 balancedBlock = (numSeg + targetBlocks - 1) / targetBlocks;
+        const UInt64 blockSegments = std::max<UInt64>(
+            1, std::min(BLOCK_SEGMENTS, balancedBlock)
+        );
+        const UInt64 numBlocks = (numSeg + blockSegments - 1) / blockSegments;
 
-        // Phase 2: medium primes
-        if (mSmallPrimeStopIdx < idxLargeBegin) {
-            #pragma omp parallel for schedule(dynamic, 1)
-            for (UInt64 l = 0; l < len; l += M2) {
-                sieveMediumSubSegment(MuP + l, P.data(), lo + l, std::min(lo + l + M2 - 1, hi),
-                                      mSmallPrimeStopIdx, idxLargeBegin, &mSieveQCache);
-            }
-        }
+        #pragma omp parallel
+        {
+            const int tid = omp_get_thread_num();
+            std::vector<UInt32> nextOff;
 
-        // Phase 3: large primes by bucket scheduler
-        //
-        // Two strategies, selected at runtime: serial routing (one pass
-        // routes each prime's first hit to the owning thread's bucket — no
-        // redundant scans, but the routing itself is serial) vs parallel
-        // constructors (every thread scans all large primes, keeping only
-        // its own hits). Serial routing wins when there are enough
-        // sub-segments per large prime to amortize the serial pass — the
-        // LP_ROUTE_THRESHOLD test.
-        const UInt64 numSeg = (len + (UInt64)M2 - 1) / (UInt64)M2;
-        const UInt32 numLP = mSqrtPrimeStopIdx - idxLargeBegin;
-        const bool useSerialRouting = ((UInt64)numSeg * LP_ROUTE_THRESHOLD >= numLP);
+            #pragma omp for schedule(dynamic, 1)
+            for (UInt64 block = 0; block < numBlocks; ++block) {
+                const UInt64 s0 = block * blockSegments;
+                const UInt64 s1 = std::min(s0 + blockSegments, numSeg);
+                const UInt64 blockLo = lo + s0 * M2;
+                const UInt64 blockHi = std::min(lo + s1 * M2 - 1, hi);
 
-        if (useSerialRouting) {
-            // --- Serial routing (Option A) ---
-            const int nt = omp_get_max_threads();
+                LargePrimeHitScheduler sched(
+                    lo, blockLo, blockHi, M2, P,
+                    idxLargeBegin, mSqrtPrimeStopIdx - 1,
+                    mBuckets[tid], &mSieveQCache
+                );
 
-            // Precompute per-thread sub-segment boundaries
-            std::vector<UInt64> tStart(nt + 1);
-            for (int t = 0; t <= nt; ++t)
-                tStart[t] = (numSeg * (UInt64)t) / (UInt64)nt;
-
-            // Ensure all thread bucket arrays are sized and cleared
-            for (int t = 0; t < nt; ++t) {
-                auto& bk = mBuckets[t];
-                if (bk.size() < LargePrimeHitScheduler::LP_NBUCKETS)
-                    bk.resize(LargePrimeHitScheduler::LP_NBUCKETS);
-                for (auto& v : bk) v.clear();
-            }
-
-            // Route each large prime's first hit to EVERY thread whose range
-            // it intersects. The bucket scheduler's forwarding mechanism
-            // handles subsequent hits within a thread, but cannot cross
-            // thread boundaries — so each thread needs its own seed hit.
-            {
-                const UInt32* Pd = P.data();
-                for (UInt32 i = idxLargeBegin; i <= mSqrtPrimeStopIdx - 1; ++i) {
-                    const UInt64 p = Pd[i];
-                    if (p > hi) break;
-
-                    for (int t = 0; t < nt; ++t) {
-                        const UInt64 tLo = lo + tStart[t] * M2;
-                        const UInt64 tHi = (t + 1 < nt)
-                            ? lo + tStart[t + 1] * M2 - 1
-                            : hi;
-
-                        UInt64 m;
-                        if constexpr (UseDivisionFree) {
-                            m = p * mSieveQCache.ceilDiv(tLo, i, p);
-                        } else {
-                            m = p * (((tLo - 1) / p) + 1);
-                        }
-
-                        if (m > tHi) continue;
-
-                        const UInt64 localSubSeg = (m - tLo) / M2;
-                        using Sched = LargePrimeHitScheduler;
-                        const Sched::EntryT en =
-                            Sched::packEntry((UInt32)p, (m - tLo) - localSubSeg * M2);
-                        mBuckets[t][Sched::ringIndex(localSubSeg, en)].push_back(en);
+                const UInt64 mediumCount = idxLargeBegin - mSmallPrimeStopIdx;
+                nextOff.resize(static_cast<size_t>(mediumCount));
+                for (UInt64 i = mSmallPrimeStopIdx; i < idxLargeBegin; ++i) {
+                    const UInt64 p = P[i];
+                    UInt64 first;
+                    if constexpr (UseDivisionFree) {
+                        first = p * mSieveQCache.ceilDiv(blockLo, i, p);
+                    } else {
+                        first = p * (((blockLo - 1) / p) + 1);
                     }
+                    nextOff[i - mSmallPrimeStopIdx] = static_cast<UInt32>(first - blockLo);
                 }
-            }
 
-            // Each thread processes its pre-populated buckets
-            #pragma omp parallel num_threads(nt)
-            {
-                const int tid = omp_get_thread_num();
-
-                const UInt64 s0 = tStart[tid];
-                const UInt64 s1 = tStart[tid + 1];
-
-                if (s0 < s1) {
-                    LargePrimeHitScheduler sched(
-                        LargePrimeHitScheduler::PrePopulated{},
-                        lo, lo + s0 * M2, std::min(lo + s1 * M2 - 1, hi),
-                        M2, P, idxLargeBegin, mSqrtPrimeStopIdx - 1, mBuckets[tid],
-                        &mSieveQCache);
-
-                    for (UInt64 s = s0; s < s1; ++s) {
-                        sched.sieveSubSegment(MuP);
-                        // Finalize this sub-segment now, while its lines are
-                        // cache-hot from the bucket hits — a separate pass
-                        // would re-read the whole segment from DRAM. Safe:
-                        // this thread owns s and all other writers finished
-                        // in earlier barrier-separated phases.
-                        const UInt64 L = lo + s * M2;
-                        if constexpr (Finalize)
-                            finalizeMu(MuP + s * M2, L, std::min(L + M2 - 1, hi));
-                    }
-                }
-            }
-
-        } else {
-            // --- Parallel constructors (baseline) ---
-            #pragma omp parallel
-            {
-                const int tid = omp_get_thread_num();
-                const int nt  = omp_get_num_threads();
-
-                const UInt64 s0 = (numSeg * (UInt64)(tid    )) / (UInt64)nt;
-                const UInt64 s1 = (numSeg * (UInt64)(tid + 1)) / (UInt64)nt;
-
-                if (s0 < s1) {
-                    LargePrimeHitScheduler sched(lo, lo + s0 * M2, std::min(lo + s1 * M2 - 1, hi),
-                                                 M2, P, idxLargeBegin, mSqrtPrimeStopIdx - 1, mBuckets[tid],
-                                                 &mSieveQCache);
-
-                    for (UInt64 s = s0; s < s1; ++s) {
-                        sched.sieveSubSegment(MuP);
-                        // Finalize cache-hot; see the comment in the serial-
-                        // routing branch above.
-                        const UInt64 L = lo + s * M2;
-                        if constexpr (Finalize)
-                            finalizeMu(MuP + s * M2, L, std::min(L + M2 - 1, hi));
-                    }
+                for (UInt64 s = s0; s < s1; ++s) {
+                    const UInt64 L = lo + s * M2;
+                    const UInt64 H = std::min(L + M2 - 1, hi);
+                    sieveMediumSubSegmentRolling(
+                        MuP + s * M2, P.data(), H - L + 1,
+                        mSmallPrimeStopIdx, idxLargeBegin, nextOff
+                    );
+                    sched.sieveSubSegment(MuP);
+                    if constexpr (Finalize)
+                        finalizeMu(MuP + s * M2, L, H);
                 }
             }
         }
@@ -666,6 +726,27 @@ void SegmentedMobiusSieveCore::sieveMediumSubSegment(Int8* __restrict Mu, const 
             Mu[pos] += l;
 
         // p^2 multiples handled once per segment by sieveSquaresPass.
+    }
+}
+
+void SegmentedMobiusSieveCore::sieveMediumSubSegmentRolling(
+    Int8* __restrict Mu, const UInt32* __restrict primes, UInt64 len,
+    UInt64 fromIdx, UInt64 toIdx, std::vector<UInt32>& nextOff) {
+    for (UInt64 i = fromIdx; i < toIdx; ++i) {
+        const UInt64 p = primes[i];
+        UInt64 pos = nextOff[i - fromIdx];
+        const Int8 l = static_cast<Int8>((64 - __builtin_clzll(p)) | 1ULL);
+
+        for (; pos + 3 * p < len; pos += 4 * p) {
+            Mu[pos] += l;
+            Mu[pos + p] += l;
+            Mu[pos + 2 * p] += l;
+            Mu[pos + 3 * p] += l;
+        }
+        for (; pos < len; pos += p)
+            Mu[pos] += l;
+
+        nextOff[i - fromIdx] = static_cast<UInt32>(pos - len);
     }
 }
 
