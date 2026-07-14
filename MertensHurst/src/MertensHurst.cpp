@@ -28,6 +28,16 @@ static_assert(MERTENSHURST_S2_OUTER_Q6 == 0 || MERTENSHURST_S2_OUTER_Q6 == 1,
 static_assert(!UseS2OuterQ6 || UseS1OuterQ6,
               "S2 outer Q=6 requires the Q=6 global/S1 state");
 
+// Production needs only M(x), which follows directly from a signed sum of the
+// compact partial values. Retain full back substitution as an exact oracle.
+#ifndef MERTENSHURST_FULL_RECOVERY
+#define MERTENSHURST_FULL_RECOVERY 0
+#endif
+static constexpr bool UseFullRecovery = MERTENSHURST_FULL_RECOVERY;
+static_assert(MERTENSHURST_FULL_RECOVERY == 0 || MERTENSHURST_FULL_RECOVERY == 1,
+              "MERTENSHURST_FULL_RECOVERY must be 0 or 1");
+static constexpr bool NeedsOuterHash = !UseS1OuterQ6 || UseFullRecovery;
+
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -81,6 +91,7 @@ private:
 
     static UInt64 getSegmentSize(UInt128 n, UInt64 u);
 
+    template<bool StoreHash, bool StoreRecoverySigns>
     void initializeBounds(
         UInt128 n, UInt64 u,
         const Int8* mu,
@@ -92,7 +103,8 @@ private:
         std::vector<UInt64>& partialArgsDivU,
         std::vector<UInt32>& hash,
         std::vector<UInt32>& hash2,
-        std::vector<UInt64>& s2SplitCache
+        std::vector<UInt64>& s2SplitCache,
+        std::vector<UInt64>& negativeRecoverySigns
     );
 
     struct Chunk {
@@ -144,6 +156,7 @@ UInt64 MertensComputer::getSegmentSize(UInt128 n, UInt64 u) {
 // Initialize cached bounds
 // ============================================================================
 
+template<bool StoreHash, bool StoreRecoverySigns>
 void MertensComputer::initializeBounds(
     UInt128 n, UInt64 u,
     const Int8* mu,
@@ -155,15 +168,21 @@ void MertensComputer::initializeBounds(
     std::vector<UInt64>& partialArgsDivU,
     std::vector<UInt32>& hash,
     std::vector<UInt32>& hash2,
-    std::vector<UInt64>& s2SplitCache
+    std::vector<UInt64>& s2SplitCache,
+    std::vector<UInt64>& negativeRecoverySigns
 ) {
-    UInt32 end = hash.size();
+    const UInt32 end = static_cast<UInt32>(n / u) + 1;
     UInt32 i = 1;
 
     for (UInt32 j = 1; j < end; ++j) {
         if (mu[j-1]) {
-            hash[j] = i;
+            if constexpr (StoreHash)
+                hash[j] = i;
             hash2[i] = j;
+            if constexpr (StoreRecoverySigns) {
+                if (mu[j-1] < 0)
+                    negativeRecoverySigns[i >> 6] |= UInt64(1) << (i & 63);
+            }
             const UInt128 quotient = n / j;
 
             if (quotient > UInt128(1000000000000000000ULL))
@@ -276,46 +295,75 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     // Round up to stencil alignment
     const UInt64 nuCAP = BF * (nu / BF + 1);
 
-    // Initial sieve of mu over [1, nuCAP] for squarefree detection
-    SegmentedMobiusSieveCore initialSieve;
-    std::vector<UInt32> primes = sievePrimesUpToSqrt(nuCAP);
-    initialSieve.initialize(nuCAP);
-    initialSieve.sieve(1, nuCAP, primes);
-
-    // mx = number of squarefree integers in [1, nu]. Only squarefree k
-    // contribute to the outer sum (since mu(k)=0 otherwise).
     Int32 mx = 0;
-    for (UInt32 i = 0; i < nu; ++i) {
-        mx += initialSieve[i] & 1;
-    }
-
-    // hash[j] = compressed index of squarefree j, hash2[i] = original j.
-    // only squarefree j get entries — skips the ~39% with mu(j)=0.
-    std::vector<UInt32> hash(nu+1, 0);
-    std::vector<UInt32> hash2(nu+1, 0);
-    std::vector<UInt64> partialArgs(mx+1), nusVec(mx+1), kappas(mx+1), kappas2(mx+1), partialArgsDivU(mx+1);
-    std::vector<UInt64> s2SplitCache(mx + 1, 0);
-
+    std::vector<UInt32> primes;
+    std::vector<UInt32> hash;
+    std::vector<UInt32> hash2;
+    std::vector<UInt64> partialArgs;
+    std::vector<UInt64> nusVec;
+    std::vector<UInt64> kappas;
+    std::vector<UInt64> kappas2;
+    std::vector<UInt64> partialArgsDivU;
+    std::vector<UInt64> s2SplitCache;
+    std::vector<UInt64> negativeRecoverySigns;
     std::vector<UInt128> partialArgs128(1, UInt128(0));
 
-    std::vector<UInt64> qcache(2*mx+2, 0);
+    // The initial mu values are needed only while constructing the compact
+    // square-free maps and cached bounds. Scope the large buffer accordingly.
+    {
+        SegmentedMobiusSieveCore initialSieve;
+        primes = sievePrimesUpToSqrt(nuCAP);
+        initialSieve.initialize(nuCAP);
+        initialSieve.sieve(1, nuCAP, primes);
 
-    initializeBounds(n, u, initialSieve.data(),
-                     partialArgs128, partialArgs, nusVec, kappas, kappas2,
-                     partialArgsDivU, hash, hash2, s2SplitCache);
+        // mx = number of squarefree integers in [1, nu]. Only squarefree k
+        // contribute to the outer sum (since mu(k)=0 otherwise).
+        for (UInt32 i = 0; i < nu; ++i)
+            mx += initialSieve[i] & 1;
+
+        // hash[j] maps original j to its compact square-free index; hash2 is
+        // the reverse map and therefore needs only mx + 1 entries.
+        if constexpr (NeedsOuterHash)
+            hash.assign(nu+1, 0);
+        hash2.assign(mx+1, 0);
+        partialArgs.resize(mx+1);
+        nusVec.resize(mx+1);
+        kappas.resize(mx+1);
+        kappas2.resize(mx+1);
+        partialArgsDivU.resize(mx+1);
+        s2SplitCache.resize(mx+1);
+        if constexpr (!UseFullRecovery)
+            negativeRecoverySigns.resize(static_cast<UInt32>(mx) / 64 + 1);
+
+        initializeBounds<NeedsOuterHash, !UseFullRecovery>(
+            n, u, initialSieve.data(), partialArgs128, partialArgs, nusVec,
+            kappas, kappas2, partialArgsDivU, hash, hash2, s2SplitCache,
+            negativeRecoverySigns
+        );
+    }
+
+    std::vector<UInt64> qcache;
+    if constexpr (!UseS1OuterQ6)
+        qcache.resize(2*mx+2, 0);
 
     const UInt64 nuMax = nusVec[1];
     const UInt32 cnt128 = partialArgs128.size()-1;
 
-    // The hot Q=6 S1 mapping is separate from the all-squarefree recovery map.
-    // C and D are stored only for active k coprime to 6; A and B already live
-    // in kappas/kappas2 for the current path.
+    // Keep S1/S2 bounds for active Q=6 entries contiguous. State needed by
+    // every square-free entry remains in the full compact arrays.
     std::vector<S1Q6WorkItem> s1Q6Worklist;
+    std::vector<UInt64> q6PartialArgs;
+    std::vector<UInt128> q6PartialArgs128;
+    std::vector<UInt64> q6PartialArgsDivU;
+    std::vector<UInt64> q6Kappa1;
+    std::vector<UInt64> q6Kappa2;
+    std::vector<UInt64> q6S2SplitCache;
     std::vector<UInt64> s1Q6Kappa3;
     std::vector<UInt64> s1Q6Kappa6;
     std::vector<UInt64> s2Q6Nu3;
     std::vector<UInt64> s2Q6Nu6;
     std::vector<UInt32> q6WorkIndexByCompact;
+    UInt32 compactHalf = 0;
     if constexpr (UseS1OuterQ6) {
         s1Q6Worklist = buildS1Q6Worklist(
             hash2.data(), static_cast<UInt32>(mx), nu
@@ -325,7 +373,6 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         if constexpr (UseS2OuterQ6) {
             s2Q6Nu3.resize(s1Q6Worklist.size());
             s2Q6Nu6.resize(s1Q6Worklist.size());
-            q6WorkIndexByCompact.assign(mx + 1, 0);
         }
         for (std::size_t workIndex = 0; workIndex < s1Q6Worklist.size(); ++workIndex) {
             const UInt32 index = s1Q6Worklist[workIndex].compactIndex;
@@ -341,7 +388,51 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             if constexpr (UseS2OuterQ6) {
                 s2Q6Nu3[workIndex] = nu3;
                 s2Q6Nu6[workIndex] = nu6;
-                q6WorkIndexByCompact[index] = static_cast<UInt32>(workIndex + 1);
+            }
+        }
+        if constexpr (UseS2OuterQ6) {
+            compactHalf = static_cast<UInt32>(std::upper_bound(
+                hash2.begin(), hash2.end(), static_cast<UInt32>(nu / 2)
+            ) - hash2.begin() - 1);
+            hash2 = {};
+        }
+
+        auto compactQ6Bounds = [&](std::vector<UInt64>& compact,
+                                   std::vector<UInt64>& full,
+                                   bool releaseFull) {
+            compact.resize(s1Q6Worklist.size());
+            #pragma omp parallel for schedule(static) if(s1Q6Worklist.size() >= 1000000)
+            for (UInt64 workIndex = 0; workIndex < s1Q6Worklist.size(); ++workIndex) {
+                compact[workIndex] = full[s1Q6Worklist[workIndex].compactIndex];
+            }
+            if (releaseFull)
+                full = {};
+        };
+
+        compactQ6Bounds(q6PartialArgs, partialArgs, UseS2OuterQ6);
+        UInt64 q6WideCount = 0;
+        while (q6WideCount < s1Q6Worklist.size()
+               && s1Q6Worklist[q6WideCount].compactIndex <= cnt128) {
+            ++q6WideCount;
+        }
+        q6PartialArgs128.resize(q6WideCount);
+        #pragma omp parallel for schedule(static) if(q6WideCount >= 1000000)
+        for (UInt64 workIndex = 0; workIndex < q6WideCount; ++workIndex) {
+            q6PartialArgs128[workIndex]
+                = partialArgs128[s1Q6Worklist[workIndex].compactIndex];
+        }
+        if constexpr (UseS2OuterQ6)
+            partialArgs128 = {};
+        compactQ6Bounds(q6PartialArgsDivU, partialArgsDivU, true);
+        compactQ6Bounds(q6Kappa1, kappas, false);
+        compactQ6Bounds(q6Kappa2, kappas2, true);
+        if constexpr (UseS2OuterQ6) {
+            compactQ6Bounds(q6S2SplitCache, s2SplitCache, true);
+            q6WorkIndexByCompact.assign(mx + 1, 0);
+            #pragma omp parallel for schedule(static) if(s1Q6Worklist.size() >= 1000000)
+            for (UInt64 workIndex = 0; workIndex < s1Q6Worklist.size(); ++workIndex) {
+                q6WorkIndexByCompact[s1Q6Worklist[workIndex].compactIndex]
+                    = static_cast<UInt32>(workIndex + 1);
             }
         }
     }
@@ -451,15 +542,17 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 const UInt32 index = item.compactIndex;
                 if (__builtin_expect(index > cnt128, true)) {
                     partialValues[index] -= evaluateS1OuterQ6(
-                        item.mode, partialArgs[index], partialArgsDivU[index],
-                        kappas[index], kappas2[index],
+                        item.mode, q6PartialArgs[workIndex],
+                        q6PartialArgsDivU[workIndex], q6Kappa1[workIndex],
+                        q6Kappa2[workIndex],
                         s1Q6Kappa3[workIndex], s1Q6Kappa6[workIndex],
                         segmentLo, segmentHi, mertensCoarse, residual, qCache, dCAP
                     );
                 } else {
                     partialValues128[index] -= evaluateS1OuterQ6(
-                        item.mode, partialArgs128[index], partialArgsDivU[index],
-                        kappas[index], kappas2[index],
+                        item.mode, q6PartialArgs128[workIndex],
+                        q6PartialArgsDivU[workIndex], q6Kappa1[workIndex],
+                        q6Kappa2[workIndex],
                         s1Q6Kappa3[workIndex], s1Q6Kappa6[workIndex],
                         segmentLo, segmentHi, mertensCoarse, residual, qCache, dCAP
                     );
@@ -491,10 +584,15 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     };
 
     auto isS2Active = [&](UInt32 index) {
-        const UInt64 outer = hash2[index];
         if constexpr (UseS2OuterQ6)
-            return outer % 6 == 1 || outer % 6 == 5;
-        return (outer & 1ULL) != 0;
+            return q6WorkIndexByCompact[index] != 0;
+        return (hash2[index] & 1U) != 0;
+    };
+
+    auto isCurrentHalf = [&](UInt32 index) {
+        if constexpr (UseS2OuterQ6)
+            return index <= compactHalf;
+        return hash2[index] <= nu / 2;
     };
 
     auto q6WorkIndex = [&](UInt32 index) -> UInt32 {
@@ -521,8 +619,8 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         if constexpr (UseS2OuterQ6) {
             const UInt32 workIndex = q6WorkIndex(index);
             return update_S2_q6<S2Q6Spec>(
-                partialArgs[index], L1, lo, hi, MuP,
-                q6OuterClass(workIndex), nusVec[index], s2SplitCache[index],
+                q6PartialArgs[workIndex], L1, lo, hi, MuP,
+                q6OuterClass(workIndex), nusVec[index], q6S2SplitCache[workIndex],
                 s2Q6Nu3[workIndex], s2Q6Nu6[workIndex], qCache, dCAP
             );
         }
@@ -538,8 +636,8 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         if constexpr (UseS2OuterQ6) {
             const UInt32 workIndex = q6WorkIndex(index);
             return update_S2_q6_128<S2Q6Spec>(
-                partialArgs128[index], L1, lo, hi, MuP,
-                q6OuterClass(workIndex), nusVec[index], s2SplitCache[index],
+                q6PartialArgs128[workIndex], L1, lo, hi, MuP,
+                q6OuterClass(workIndex), nusVec[index], q6S2SplitCache[workIndex],
                 s2Q6Nu3[workIndex], s2Q6Nu6[workIndex]
             );
         }
@@ -601,9 +699,8 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 
                 #pragma omp parallel for schedule(dynamic, 1)
                 for (UInt64 i = mx0+1; i <= (UInt64)mx1; ++i) {
-                    const UInt64 jj = hash2[i];
                     if (isS2Active(static_cast<UInt32>(i))) {
-                        const bool currentHalf = jj <= nu / 2;
+                        const bool currentHalf = isCurrentHalf(static_cast<UInt32>(i));
                         if (__builtin_expect(i > cnt128, true)) {
                             const Int64 v = applyS2_64(
                                 static_cast<UInt32>(i), L1,
@@ -660,9 +757,23 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 #undef M16BITMAX
 #undef MFRAC
 
-    nusVec = std::vector<UInt64>({});
-    s2SplitCache = std::vector<UInt64>({});
-    chunks = std::vector<Chunk>({});
+    nusVec = {};
+    s2SplitCache = {};
+    chunks = {};
+    R = {};
+    M16 = {};
+    if constexpr (UseS1OuterQ6) {
+        partialArgs = {};
+        partialArgs128 = {};
+        kappas = {};
+        hash2 = {};
+    }
+    if constexpr (UseS2OuterQ6) {
+        q6S2SplitCache = {};
+        s2Q6Nu3 = {};
+        s2Q6Nu6 = {};
+        q6WorkIndexByCompact = {};
+    }
 
     // Loop 2 only does S1 (S2 is done after Loop 0/1), so segments can be
     // much larger — up to ~12 billion elements — to cut down on the
@@ -731,24 +842,32 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     }
 
     // ========================================================================
-    // Square-free Mobius recovery. For both the Q2 and Q6 invariants,
+    // Square-free Mobius finalization. For both the Q2 and Q6 invariants,
     //
     //   P_i = sum_{m: i*m<=nu, i*m square-free} W_{i*m}.
     //
-    // Decreasing-i back substitution recovers W_i, and W_1=M(x).
+    // Production obtains W_1=M(x) directly by Mobius inversion. The oracle
+    // build retains decreasing-i back substitution of every W_i.
     // ========================================================================
 
-    if (cnt128 > 0) {
-        partialValues128.resize(partialValues.size());
-        for (UInt32 i = cnt128+1; i <= (UInt32)mx; ++i)
-            partialValues128[i] = (Int128)partialValues[i];
+    if constexpr (!UseFullRecovery) {
+        return static_cast<Int64>(recoverSquarefreeFinalValue(
+            partialValues, partialValues128, cnt128, negativeRecoverySigns,
+            static_cast<UInt32>(mx)
+        ));
+    } else {
+        if (cnt128 > 0) {
+            partialValues128.resize(partialValues.size());
+            for (UInt32 i = cnt128+1; i <= (UInt32)mx; ++i)
+                partialValues128[i] = (Int128)partialValues[i];
 
-        recoverSquarefreeInPlace(partialValues128, hash, static_cast<UInt32>(nu));
-        return (Int64)partialValues128[1];
+            recoverSquarefreeInPlace(partialValues128, hash, static_cast<UInt32>(nu));
+            return (Int64)partialValues128[1];
+        }
+
+        recoverSquarefreeInPlace(partialValues, hash, static_cast<UInt32>(nu));
+        return partialValues[1];
     }
-
-    recoverSquarefreeInPlace(partialValues, hash, static_cast<UInt32>(nu));
-    return partialValues[1];
 }
 
 } // anonymous namespace

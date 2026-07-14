@@ -37,7 +37,6 @@ enum class S1OuterQ6Mode : UInt8 {
 
 struct S1Q6WorkItem {
     UInt32 compactIndex;
-    UInt32 outerK;
     S1OuterQ6Mode mode;
 };
 
@@ -333,7 +332,7 @@ static inline std::vector<S1Q6WorkItem> buildS1Q6Worklist(
         if (k == 0 || k > N) break;
         const UInt32 residue = k % 6;
         if (residue == 1 || residue == 5)
-            work.push_back(S1Q6WorkItem{index, k, classifyS1OuterQ6(k, N)});
+            work.push_back(S1Q6WorkItem{index, classifyS1OuterQ6(k, N)});
     }
     return work;
 }
