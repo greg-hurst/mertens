@@ -117,7 +117,8 @@ private:
     static void finalizeMuVec(Int8* mu, int fl, size_t n);
 #endif
 
-    // Apply hardcoded small primes 13..353, then M1 medium primes.
+    // Apply hardcoded small primes 13..353, then M1 medium primes using
+    // constant-stride and four-stream kernels.
     static void sieveM1PrimeRange(Int8* mu, const UInt32* primes, UInt64 lo, UInt64 hi,
                                   UInt32 stoppos, const SieveQuotientCache* cache);
 
@@ -296,6 +297,19 @@ private:
     static constexpr UInt64 M1_PRIME_CAP = SIEVE_M1_PRIME_CAP;
     static_assert(M1_PRIME_CAP >= 353,
                   "M1-prime cap must include the fully unrolled small primes through 353");
+
+    // M1 medium primes through this boundary use compile-time constant-stride
+    // loops; the remaining M1 medium primes use the four-stream walk. The
+    // default is tuned for Apple M3 Ultra. Values through 2,039 are available
+    // for compile-time retuning on other machines.
+#ifndef SIEVE_M1_CONSTANT_PRIME_CAP
+#define SIEVE_M1_CONSTANT_PRIME_CAP 1021
+#endif
+    static constexpr UInt64 M1_CONSTANT_PRIME_CAP = SIEVE_M1_CONSTANT_PRIME_CAP;
+    static_assert(M1_CONSTANT_PRIME_CAP >= 353 && M1_CONSTANT_PRIME_CAP <= 2039,
+                  "constant-prime cap must be between 353 and 2,039");
+    static_assert(M1_CONSTANT_PRIME_CAP <= M1_PRIME_CAP,
+                  "constant-prime cap cannot exceed the M1-prime cap");
 
     // --- Data members ---
     std::vector<Int8> mMu;           // Main sieve buffer

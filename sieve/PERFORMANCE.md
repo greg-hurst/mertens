@@ -84,7 +84,7 @@ For a $10^9$-element segment, the compressed mode uses approximately 1.03 GB (31
 
 ## 3. Stencil pre-sieve
 
-The first primes are handled by a stencil of period $P = 13{,}860 = \text{lcm}(4, 9, 5, 7, 11)$. A stencil of this period, pre-sieved by 2, 3, $2^2$, 5, 7, $3^2$, and 11, is computed once and then copied into each new segment. After the stencil has been copied, the small primes through 353 are applied by hardcoded unrolled loops. Medium primes begin at 359: M1 medium primes through `M1_PRIME_CAP` use a four-stream walk on M1 chunks, and tiled medium primes use wider direct-sieve tiles. Large primes are handled by the bucket scheduler below.
+The first primes are handled by a stencil of period $P = 13{,}860 = \text{lcm}(4, 9, 5, 7, 11)$. A stencil of this period, pre-sieved by 2, 3, $2^2$, 5, 7, $3^2$, and 11, is computed once and then copied into each new segment. After the stencil has been copied, the small primes through 353 are applied by hardcoded unrolled loops. Medium primes begin at 359: M1 medium primes through `M1_CONSTANT_PRIME_CAP` use fully unrolled constant-stride tables, the remainder through `M1_PRIME_CAP` use a four-stream walk on M1 chunks, and tiled medium primes use wider direct-sieve tiles. Large primes are handled by the bucket scheduler below.
 
 The five smallest primes account for the densest sieving work. Their combined period is small enough to fit in L1 cache (13,860 bytes) while eliminating the most expensive per-segment iterations. Adding 13 would increase the period to $180{,}180$, which is still feasible but offers diminishing returns since prime 13 only touches $1/13 \approx 7.7\%$ of positions.
 
@@ -98,13 +98,13 @@ The paper's small, medium, and large categories are implemented with the followi
 |------|--------|-----------|--------|
 | Stencil | $p \le 11$ | $P = 13{,}860$ | Copy the pre-sieved stencil |
 | Small | $13 \le p \le 353$ | $M_1 = 8P = 110{,}880$ | Hardcoded constant-stride loops |
-| M1 medium | $359 \le p \le 32{,}000$ | $M_1$ | Walk four adjacent prime streams together |
+| M1 medium | $359 \le p \le 32{,}000$ | $M_1$ | Constant-stride tables through 1,021, then four adjacent streams |
 | Tiled medium | $32{,}000 < p \le X$ | $M_2$ or a larger direct tile | Four-stream direct iteration |
 | Large | $p > X$ | $M_2 = 64P = 887{,}040$ | Circular bucket scheduler |
 
 The M1-stage unit $M_1$ keeps its working set in L1 cache. $M_2$ balances per-sub-segment overhead against cache pressure for medium primes. $M_3 = 90P = 1{,}247{,}400$ is the crossover point where a prime's stride exceeds the sub-segment length, making direct iteration wasteful since each prime hits at most one position per sub-segment.
 
-Primes 13 through 353 (indices 5 through 70 in a typical prime list) are sieved with manually unrolled constant-stride loops. Primes 359 through `M1_PRIME_CAP` use the general log-prime encoding while walking four adjacent prime streams together.
+Primes 13 through 353 (indices 5 through 70 in a typical prime list) are sieved with manually unrolled constant-stride loops. By default, M1 medium primes 359 through 1,021 come from compact constant-prime tables that the compiler fully unrolls; primes 1,031 through `M1_PRIME_CAP` use the general log-prime encoding while walking four adjacent streams together. Override `SIEVE_M1_CONSTANT_PRIME_CAP` at compile time to retune this handoff from 353 through 2,039, for example with `make EXTRA_CXXFLAGS="-DSIEVE_M1_CONSTANT_PRIME_CAP=1523"`.
 
 ### Bucket scheduler
 
