@@ -10,7 +10,7 @@
 //   - byte = 0x80 | S, where bit 7 is the squarefree flag and the low 7 bits
 //     hold S = sum of (ceil(log2 p) | 1) over the small-prime factors p|n.
 //   - Entries divisible by 4 or 9 are zeroed (square factor). Squares of
-//     5, 7, 11 are left intact here and zeroed later by sieveHelper1.
+//     5, 7, 11 are left intact here and zeroed later by sieveM1PrimeRange.
 //   - The finalization step converts these packed values into mu in {-1,0,1}.
 //
 // The stencil is used to initialize sieve segments via memcpy, avoiding

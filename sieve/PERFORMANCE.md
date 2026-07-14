@@ -84,7 +84,7 @@ For a $10^9$-element segment, the compressed mode uses approximately 1.03 GB (31
 
 ## 3. Stencil pre-sieve
 
-The first primes are handled by a stencil of period $P = 13{,}860 = \text{lcm}(4, 9, 5, 7, 11)$. A stencil of this period, pre-sieved by 2, 3, $2^2$, 5, 7, $3^2$, and 11, is computed once and then copied into each new segment. In the implementation used here, this copy is done in large tiles ($\sim 4$ MiB) so that the memory copy reaches high bandwidth. After the stencil has been copied, primes up to 353 are applied by unrolled code. Here small primes are those treated by these unrolled loops, medium primes are the remaining primes that are sieved directly, and large primes are those handled by the bucket scheduler below.
+The first primes are handled by a stencil of period $P = 13{,}860 = \text{lcm}(4, 9, 5, 7, 11)$. A stencil of this period, pre-sieved by 2, 3, $2^2$, 5, 7, $3^2$, and 11, is computed once and then copied into each new segment. After the stencil has been copied, the small primes through 353 are applied by hardcoded unrolled loops. Medium primes begin at 359: M1 medium primes through `M1_PRIME_CAP` use a four-stream walk on M1 chunks, and tiled medium primes use wider direct-sieve tiles. Large primes are handled by the bucket scheduler below.
 
 The five smallest primes account for the densest sieving work. Their combined period is small enough to fit in L1 cache (13,860 bytes) while eliminating the most expensive per-segment iterations. Adding 13 would increase the period to $180{,}180$, which is still feasible but offers diminishing returns since prime 13 only touches $1/13 \approx 7.7\%$ of positions.
 
@@ -92,17 +92,19 @@ The five smallest primes account for the densest sieving work. Their combined pe
 
 ## 4. Sieve phases and sub-segment hierarchy
 
-The sieve partitions primes into three categories based on size, each handled by a different phase with its own working-unit size:
+The paper's small, medium, and large categories are implemented with the following processing tiers:
 
-| Phase | Primes | Unit size | Method |
-|-------|--------|-----------|--------|
-| 1 (small) | $p \le P = 13{,}860$ | $M_1 = 4P = 55{,}440$ | Stencil copy + hardcoded unrolled sieve for $p \le 353$ |
-| 2 (medium) | $P < p \le M_3$ | $M_2 = 64P = 887{,}040$ | Direct iteration: for each prime, walk through the sub-segment hitting multiples |
-| 3 (large) | $p > M_3 = 90P$ | $M_2 = 887{,}040$ | Bucket scheduler: primes are scheduled into future sub-segments via circular buffer |
+| Tier | Primes | Unit size | Method |
+|------|--------|-----------|--------|
+| Stencil | $p \le 11$ | $P = 13{,}860$ | Copy the pre-sieved stencil |
+| Small | $13 \le p \le 353$ | $M_1 = 8P = 110{,}880$ | Hardcoded constant-stride loops |
+| M1 medium | $359 \le p \le 32{,}000$ | $M_1$ | Walk four adjacent prime streams together |
+| Tiled medium | $32{,}000 < p \le X$ | $M_2$ or a larger direct tile | Four-stream direct iteration |
+| Large | $p > X$ | $M_2 = 64P = 887{,}040$ | Circular bucket scheduler |
 
-The Phase 1 unit $M_1$ keeps its working set in L1 cache. $M_2$ balances per-sub-segment overhead against cache pressure for medium primes. $M_3 = 90P = 1{,}247{,}400$ is the crossover point where a prime's stride exceeds the sub-segment length, making direct iteration wasteful since each prime hits at most one position per sub-segment.
+The M1-stage unit $M_1$ keeps its working set in L1 cache. $M_2$ balances per-sub-segment overhead against cache pressure for medium primes. $M_3 = 90P = 1{,}247{,}400$ is the crossover point where a prime's stride exceeds the sub-segment length, making direct iteration wasteful since each prime hits at most one position per sub-segment.
 
-Primes 13 through 353 (indices 5 through 70 in a typical prime list) are sieved with manually unrolled loops using four stride patterns. The unrolling processes 4 iterations at a time for instruction-level parallelism. Primes 359 through $P$ use a general loop with log-prime encoding.
+Primes 13 through 353 (indices 5 through 70 in a typical prime list) are sieved with manually unrolled constant-stride loops. Primes 359 through `M1_PRIME_CAP` use the general log-prime encoding while walking four adjacent prime streams together.
 
 ### Bucket scheduler
 
@@ -110,7 +112,7 @@ Large primes require additional treatment. For a sub-segment being processed, mo
 
 The scheduler uses a circular buffer of `LP_SIZE = 512` buckets indexed by `subSegIndex & 511`. Each large prime is stored in the bucket corresponding to the next sub-segment that contains a multiple of that prime. When the sub-segment is processed, the prime contributes to that one location, and is then pushed forward into the bucket for its next hit. The power-of-two choice keeps the bucket index arithmetic simple, since wraparound can be handled by masking rather than by an integer division.
 
-When disabled (`BUCKET_SIEVE=0`), all primes above `SMALL_PRIME_CAP` fall back to Phase 2's direct iteration.
+The direct-sieve cutoff $X$ is $2{,}772{,}000$ when finalization is fused into the prefix sum and $1{,}247{,}400$ when the sieve finalizes $\mu$ separately. When the bucket scheduler is disabled (`BUCKET_SIEVE=0`), all primes above `M1_PRIME_CAP` fall back to tiled direct iteration.
 
 ---
 
