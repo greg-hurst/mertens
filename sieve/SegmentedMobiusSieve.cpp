@@ -16,6 +16,13 @@
 #endif
 static constexpr bool UseBucketSieve = USE_BUCKET_SIEVE;
 
+// Cutoffs for the fused raw-byte path. At high sieve bounds,
+// a larger direct tile exposes more independent memory traffic and the sparse
+// top prime band is cheaper to traverse directly than to schedule in buckets.
+static constexpr UInt64 MEDIUM_TILE_SWITCH     = UInt64(1) << 36;
+static constexpr UInt64 MEDIUM_TILE_LARGE      = UInt64(168) * SegmentedMobiusSieveCore::STENCIL_PERIOD;
+static constexpr UInt64 RAW_LARGE_PRIME_CUTOFF = UInt64(200) * SegmentedMobiusSieveCore::STENCIL_PERIOD;
+
 // Experimental: split sieveSubSegment's hit loop into a pure-scatter RMW pass and
 // a pure-ALU forwarding pass. Override at build time: -DSIEVE_TWO_PASS=1
 #ifndef SIEVE_TWO_PASS
@@ -204,7 +211,12 @@ void SegmentedMobiusSieveCore::sieve(UInt64 lo, UInt64 hi, const std::vector<UIn
 
     UInt32 idxLargeBegin = mSmallPrimeStopIdx;
     if constexpr (UseBucketSieve) {
-        while (idxLargeBegin < mSqrtPrimeStopIdx && (UInt64)P[idxLargeBegin] <= M3)
+        // MertensHurst benefits from keeping its sparse
+        // upper prime band on the direct four-stream path. Finalized callers
+        // retain the lower cutoff that wins with the rolling block walk.
+        constexpr UInt64 largePrimeCutoff = Finalize ? M3 : RAW_LARGE_PRIME_CUTOFF;
+        while (idxLargeBegin < mSqrtPrimeStopIdx
+               && static_cast<UInt64>(P[idxLargeBegin]) <= largePrimeCutoff)
             ++idxLargeBegin;
     } else {
         idxLargeBegin = mSqrtPrimeStopIdx;  // treat all primes as medium
@@ -216,12 +228,15 @@ void SegmentedMobiusSieveCore::sieve(UInt64 lo, UInt64 hi, const std::vector<UIn
         // is small-prime initialization followed immediately by the medium
         // pass. Short standalone ranges also stay here because reseeding many
         // small bucket blocks costs more than rolling offsets save.
+        const UInt64 mediumTile = hi >= MEDIUM_TILE_SWITCH
+            ? MEDIUM_TILE_LARGE
+            : M2;
         #pragma omp parallel for schedule(dynamic, 1)
-        for (UInt64 tile = 0; tile < len; tile += M2) {
-            const UInt64 tileEnd = std::min(tile + M2, len);
+        for (UInt64 tile = 0; tile < len; tile += mediumTile) {
+            const UInt64 tileEnd = std::min(tile + mediumTile, len);
             for (UInt64 l = tile; l < tileEnd; l += M1) {
                 const UInt64 L = lo + l;
-                const UInt64 H = std::min(L + M1 - 1, hi);
+                const UInt64 H = std::min({L + M1 - 1, lo + tileEnd - 1, hi});
                 const UInt64 n = H - L + 1;
                 std::memcpy(MuP + l, mPreMu.data() + stencilOff,
                             sizeof(Int8) * static_cast<size_t>(n));
@@ -230,14 +245,13 @@ void SegmentedMobiusSieveCore::sieve(UInt64 lo, UInt64 hi, const std::vector<UIn
 
             if (mSmallPrimeStopIdx < idxLargeBegin) {
                 const UInt64 L = lo + tile;
-                const UInt64 H = std::min(L + M2 - 1, hi);
+                const UInt64 H = lo + tileEnd - 1;
                 sieveMediumSubSegment(
                     MuP + tile, P.data(), L, H,
                     mSmallPrimeStopIdx, idxLargeBegin, &mSieveQCache
                 );
             }
         }
-
         sieveSquaresPass(MuP, P.data(), lo, hi, 71, mSqrtPrimeStopIdx, &mSieveQCache);
         if (idxLargeBegin < mSqrtPrimeStopIdx) {
             const UInt64 numSeg = (len + M2 - 1) / M2;
@@ -699,53 +713,116 @@ void SegmentedMobiusSieveCore::sieveMediumSubSegment(Int8* __restrict Mu, const 
                                                      const SieveQuotientCache* cache) {
     const UInt64 len = hi - lo + 1;
 
-    for (UInt64 i = fromIdx; i < toIdx; ++i) {
-        const UInt64 p = primes[i];
-
-        UInt64 st;
+    auto firstOffset = [&](UInt64 i, UInt64 p) {
         if constexpr (UseDivisionFree) {
-            const UInt64 q1 = cache->ceilDiv(lo, i, p);
-            st = p * q1 - lo;
+            return p * cache->ceilDiv(lo, i, p) - lo;
         } else {
-            st = p * (((lo - 1) / p) + 1) - lo;
+            return p * (((lo - 1) / p) + 1) - lo;
         }
+    };
 
-        if (__builtin_expect(st >= len, false))
-            continue;
-
-        const Int8 l = static_cast<Int8>((64 - __builtin_clzll(p)) | 1ULL);
-
-        UInt64 pos = st;
+    auto finishStream = [&](UInt64 pos, UInt64 p, Int8 logp) {
         for (; pos + 3 * p < len; pos += 4 * p) {
-            Mu[pos] += l;
-            Mu[pos + p] += l;
-            Mu[pos + 2 * p] += l;
-            Mu[pos + 3 * p] += l;
+            Mu[pos] += logp;
+            Mu[pos + p] += logp;
+            Mu[pos + 2 * p] += logp;
+            Mu[pos + 3 * p] += logp;
         }
         for (; pos < len; pos += p)
-            Mu[pos] += l;
+            Mu[pos] += logp;
+    };
 
-        // p^2 multiples handled once per segment by sieveSquaresPass.
+    UInt64 i = fromIdx;
+    for (; i + 3 < toIdx; i += 4) {
+        const UInt64 p0 = primes[i];
+        const UInt64 p1 = primes[i + 1];
+        const UInt64 p2 = primes[i + 2];
+        const UInt64 p3 = primes[i + 3];
+        UInt64 pos0 = firstOffset(i, p0);
+        UInt64 pos1 = firstOffset(i + 1, p1);
+        UInt64 pos2 = firstOffset(i + 2, p2);
+        UInt64 pos3 = firstOffset(i + 3, p3);
+        const Int8 l0 = static_cast<Int8>((64 - __builtin_clzll(p0)) | 1ULL);
+        const Int8 l1 = static_cast<Int8>((64 - __builtin_clzll(p1)) | 1ULL);
+        const Int8 l2 = static_cast<Int8>((64 - __builtin_clzll(p2)) | 1ULL);
+        const Int8 l3 = static_cast<Int8>((64 - __builtin_clzll(p3)) | 1ULL);
+
+        while (pos0 < len && pos1 < len && pos2 < len && pos3 < len) {
+            Mu[pos0] += l0;
+            Mu[pos1] += l1;
+            Mu[pos2] += l2;
+            Mu[pos3] += l3;
+            pos0 += p0;
+            pos1 += p1;
+            pos2 += p2;
+            pos3 += p3;
+        }
+        finishStream(pos0, p0, l0);
+        finishStream(pos1, p1, l1);
+        finishStream(pos2, p2, l2);
+        finishStream(pos3, p3, l3);
+    }
+    for (; i < toIdx; ++i) {
+        const UInt64 p = primes[i];
+        const UInt64 pos = firstOffset(i, p);
+        const Int8 logp = static_cast<Int8>((64 - __builtin_clzll(p)) | 1ULL);
+        finishStream(pos, p, logp);
     }
 }
 
 void SegmentedMobiusSieveCore::sieveMediumSubSegmentRolling(
     Int8* __restrict Mu, const UInt32* __restrict primes, UInt64 len,
     UInt64 fromIdx, UInt64 toIdx, std::vector<UInt32>& nextOff) {
-    for (UInt64 i = fromIdx; i < toIdx; ++i) {
-        const UInt64 p = primes[i];
-        UInt64 pos = nextOff[i - fromIdx];
-        const Int8 l = static_cast<Int8>((64 - __builtin_clzll(p)) | 1ULL);
-
+    auto finishStream = [&](UInt64 pos, UInt64 p, Int8 logp) {
         for (; pos + 3 * p < len; pos += 4 * p) {
-            Mu[pos] += l;
-            Mu[pos + p] += l;
-            Mu[pos + 2 * p] += l;
-            Mu[pos + 3 * p] += l;
+            Mu[pos] += logp;
+            Mu[pos + p] += logp;
+            Mu[pos + 2 * p] += logp;
+            Mu[pos + 3 * p] += logp;
         }
         for (; pos < len; pos += p)
-            Mu[pos] += l;
+            Mu[pos] += logp;
+        return pos;
+    };
 
+    UInt64 i = fromIdx;
+    for (; i + 3 < toIdx; i += 4) {
+        const UInt64 p0 = primes[i];
+        const UInt64 p1 = primes[i + 1];
+        const UInt64 p2 = primes[i + 2];
+        const UInt64 p3 = primes[i + 3];
+        UInt64 pos0 = nextOff[i - fromIdx];
+        UInt64 pos1 = nextOff[i + 1 - fromIdx];
+        UInt64 pos2 = nextOff[i + 2 - fromIdx];
+        UInt64 pos3 = nextOff[i + 3 - fromIdx];
+        const Int8 l0 = static_cast<Int8>((64 - __builtin_clzll(p0)) | 1ULL);
+        const Int8 l1 = static_cast<Int8>((64 - __builtin_clzll(p1)) | 1ULL);
+        const Int8 l2 = static_cast<Int8>((64 - __builtin_clzll(p2)) | 1ULL);
+        const Int8 l3 = static_cast<Int8>((64 - __builtin_clzll(p3)) | 1ULL);
+
+        while (pos0 < len && pos1 < len && pos2 < len && pos3 < len) {
+            Mu[pos0] += l0;
+            Mu[pos1] += l1;
+            Mu[pos2] += l2;
+            Mu[pos3] += l3;
+            pos0 += p0;
+            pos1 += p1;
+            pos2 += p2;
+            pos3 += p3;
+        }
+        pos0 = finishStream(pos0, p0, l0);
+        pos1 = finishStream(pos1, p1, l1);
+        pos2 = finishStream(pos2, p2, l2);
+        pos3 = finishStream(pos3, p3, l3);
+        nextOff[i - fromIdx] = static_cast<UInt32>(pos0 - len);
+        nextOff[i + 1 - fromIdx] = static_cast<UInt32>(pos1 - len);
+        nextOff[i + 2 - fromIdx] = static_cast<UInt32>(pos2 - len);
+        nextOff[i + 3 - fromIdx] = static_cast<UInt32>(pos3 - len);
+    }
+    for (; i < toIdx; ++i) {
+        const UInt64 p = primes[i];
+        const Int8 logp = static_cast<Int8>((64 - __builtin_clzll(p)) | 1ULL);
+        const UInt64 pos = finishStream(nextOff[i - fromIdx], p, logp);
         nextOff[i - fromIdx] = static_cast<UInt32>(pos - len);
     }
 }

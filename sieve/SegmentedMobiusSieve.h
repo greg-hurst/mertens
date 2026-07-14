@@ -258,9 +258,9 @@ private:
     // grows the per-entry stride field s = p / M2 — check both limits
     // (LP_S_MASK and the LP_SIZE comment) before production use.
 #ifndef SIEVE_M1_MULT
-#define SIEVE_M1_MULT 4
+#define SIEVE_M1_MULT 8
 #endif
-    static constexpr UInt64 M1 = SIEVE_M1_MULT * STENCIL_PERIOD;   // ~55K — Phase 1 unit
+    static constexpr UInt64 M1 = SIEVE_M1_MULT * STENCIL_PERIOD;   // ~111K — Phase 1 unit
 #ifndef SIEVE_M2_MULT
 #define SIEVE_M2_MULT 64
 #endif
