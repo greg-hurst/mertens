@@ -102,7 +102,7 @@ The paper's small, medium, and large categories are implemented with the followi
 | Tiled medium | $32{,}000 < p \le X$ | $M_2$ or a larger direct tile | Four-stream direct iteration |
 | Large | $p > X$ | $M_2 = 64P = 887{,}040$ | Circular bucket scheduler |
 
-The M1-stage unit $M_1$ keeps its working set in L1 cache. $M_2$ balances per-sub-segment overhead against cache pressure for medium primes. $M_3 = 90P = 1{,}247{,}400$ is the crossover point where a prime's stride exceeds the sub-segment length, making direct iteration wasteful since each prime hits at most one position per sub-segment.
+The M1-stage unit $M_1$ keeps its working set in L1 cache. $M_2$ balances per-sub-segment overhead against cache pressure for medium primes. The default tiled path uses a direct-sieve cutoff of $200P = 2{,}772{,}000$. The optional finalized rolling block walk (`SIEVE_FINALIZE_BLOCK_WALK=1`) retains its independently tunable $M_3 = 90P = 1{,}247{,}400$ cutoff.
 
 Primes 13 through 353 (indices 5 through 70 in a typical prime list) are sieved with manually unrolled constant-stride loops. By default, M1 medium primes 359 through 1,021 come from compact constant-prime tables that the compiler fully unrolls; primes 1,031 through `M1_PRIME_CAP` use the general log-prime encoding while walking four adjacent streams together. Override `SIEVE_M1_CONSTANT_PRIME_CAP` at compile time to retune this handoff from 353 through 2,039, for example with `make EXTRA_CXXFLAGS="-DSIEVE_M1_CONSTANT_PRIME_CAP=1523"`.
 
@@ -112,7 +112,7 @@ Large primes require additional treatment. For a sub-segment being processed, mo
 
 The scheduler uses a circular buffer of `LP_SIZE = 512` buckets indexed by `subSegIndex & 511`. Each large prime is stored in the bucket corresponding to the next sub-segment that contains a multiple of that prime. When the sub-segment is processed, the prime contributes to that one location, and is then pushed forward into the bucket for its next hit. The power-of-two choice keeps the bucket index arithmetic simple, since wraparound can be handled by masking rather than by an integer division.
 
-The direct-sieve cutoff $X$ is $2{,}772{,}000$ when finalization is fused into the prefix sum and $1{,}247{,}400$ when the sieve finalizes $\mu$ separately. When the bucket scheduler is disabled (`BUCKET_SIEVE=0`), all primes above `M1_PRIME_CAP` fall back to tiled direct iteration.
+The default direct-sieve cutoff $X$ is $2{,}772{,}000$ for both the fused-prefix and separately finalized paths. The optional finalized rolling block walk uses $X = 1{,}247{,}400$. When the bucket scheduler is disabled (`BUCKET_SIEVE=0`), all primes above `M1_PRIME_CAP` fall back to tiled direct iteration.
 
 ---
 

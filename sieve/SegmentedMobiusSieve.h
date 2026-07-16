@@ -284,7 +284,7 @@ private:
     static constexpr UInt64 M2 = SIEVE_M2_MULT * STENCIL_PERIOD;   // ~887K default
     static_assert(M2 <= (UInt64(1) << LargePrimeHitScheduler::LP_OFF_BITS),
                   "sub-segment offset must fit in LP_OFF_BITS; raise LP_OFF_BITS if M2 grows");
-    static constexpr UInt64 M3 = SIEVE_M3_MULT * STENCIL_PERIOD;   // separate-finalize direct-sieve cutoff
+    static constexpr UInt64 M3 = SIEVE_M3_MULT * STENCIL_PERIOD;   // optional block-walk direct cutoff
     static constexpr UInt64 BLOCK_SEGMENTS = 128;                  // contiguous M2 work unit
     static constexpr UInt64 BLOCK_WALK_MIN_SEGMENTS = 4096;        // ~3.6 billion values
     static_assert(M3 > M2, "large primes must exceed the sub-segment length (<= 1 hit per sub-segment)");

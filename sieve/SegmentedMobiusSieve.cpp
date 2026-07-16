@@ -16,13 +16,22 @@
 #endif
 static constexpr bool UseBucketSieve = USE_BUCKET_SIEVE;
 
-// Cutoffs for the fused raw-byte path. At high sieve bounds,
+// Cutoffs for the tiled-medium path. At high sieve bounds,
 // a larger direct tile exposes more independent memory traffic and the sparse
 // top prime band is cheaper to traverse directly than to schedule in buckets.
 static constexpr UInt64 MEDIUM_TILE_SWITCH     = UInt64(1) << 36;
 static constexpr UInt64 MEDIUM_TILE_LARGE      = UInt64(168) * SegmentedMobiusSieveCore::STENCIL_PERIOD;
-static constexpr UInt64 FUSED_DIRECT_SIEVE_CUTOFF =
+static constexpr UInt64 TILED_DIRECT_SIEVE_CUTOFF =
     UInt64(200) * SegmentedMobiusSieveCore::STENCIL_PERIOD;
+
+// The rolling block walk predates the wider tiled-medium path. Retain it as a
+// compile-time portability knob, but use the tiled path by default: the latter
+// now wins for separately finalized Mobius sieves across tested segment sizes
+// and sieve heights. Override at build time: -DSIEVE_FINALIZE_BLOCK_WALK=1
+#ifndef SIEVE_FINALIZE_BLOCK_WALK
+#define SIEVE_FINALIZE_BLOCK_WALK 0
+#endif
+static constexpr bool UseFinalizeBlockWalk = SIEVE_FINALIZE_BLOCK_WALK;
 
 // Experimental: split sieveSubSegment's hit loop into a pure-scatter RMW pass and
 // a pure-ALU forwarding pass. Override at build time: -DSIEVE_TWO_PASS=1
@@ -212,10 +221,12 @@ void SegmentedMobiusSieveCore::sieve(UInt64 lo, UInt64 hi, const std::vector<UIn
 
     UInt32 idxLargeBegin = mM1PrimeStopIdx;
     if constexpr (UseBucketSieve) {
-        // MertensHurst benefits from keeping its sparse
-        // upper prime band on the direct four-stream path. Finalized callers
-        // retain the lower cutoff that wins with the rolling block walk.
-        constexpr UInt64 directSieveCutoff = Finalize ? M3 : FUSED_DIRECT_SIEVE_CUTOFF;
+        // The tiled path benefits from keeping its sparse upper prime band on
+        // the direct four-stream path. The optional rolling block walk retains
+        // its independently tunable lower cutoff.
+        constexpr UInt64 directSieveCutoff = Finalize && UseFinalizeBlockWalk
+            ? M3
+            : TILED_DIRECT_SIEVE_CUTOFF;
         while (idxLargeBegin < mSqrtPrimeStopIdx
                && static_cast<UInt64>(P[idxLargeBegin]) <= directSieveCutoff)
             ++idxLargeBegin;
@@ -224,11 +235,12 @@ void SegmentedMobiusSieveCore::sieve(UInt64 lo, UInt64 hi, const std::vector<UIn
     }
 
     const UInt64 numSeg = (len + M2 - 1) / M2;
-    if (!Finalize || numSeg < BLOCK_WALK_MIN_SEGMENTS) {
-        // MertensHurst finalizes during its prefix scan, so its best locality
-        // is M1-stage initialization followed immediately by the tiled medium
-        // pass. Short standalone ranges also stay here because reseeding many
-        // small bucket blocks costs more than rolling offsets save.
+    if (!Finalize || !UseFinalizeBlockWalk || numSeg < BLOCK_WALK_MIN_SEGMENTS) {
+        // MertensHurst finalizes during its prefix scan, and separately
+        // finalized callers now use this same tiled-medium geometry by
+        // default. When the optional rolling block walk is enabled, short
+        // standalone ranges still stay here because reseeding many small
+        // bucket blocks costs more than rolling offsets save.
         const UInt64 mediumTile = hi >= MEDIUM_TILE_SWITCH
             ? MEDIUM_TILE_LARGE
             : M2;

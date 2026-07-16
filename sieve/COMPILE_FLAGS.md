@@ -17,7 +17,8 @@ make EXTRA_CXXFLAGS="-DSIEVE_LP_SIZE=1024 -DSIEVE_STRIDE_LOG=7"
 | `SIEVE_SUB_SHIFT` | 17 | Sub-bucket band size as log2 bytes. 17 = 128 KB = Apple L1D. On x86 (32 KB L1D) try 14-16. |
 | `SIEVE_TWO_PASS` | 0 | Experimental split of the bucket loop into a scatter pass and a forwarding pass. Measured 3-5% slower than the fused loop; kept for reference. |
 | `SIEVE_M2_MULT` | 64 | Sub-segment length in stencil periods ($64 \times 13860 = 887{,}040$). Swept 8-128; 64 is optimal on the tested machines. |
-| `SIEVE_M3_MULT` | 90 | Separately finalized direct-sieve cutoff, in stencil periods. `-DSIEVE_M2_MULT=8 -DSIEVE_M3_MULT=12` gives an L1-sized configuration for small machines. |
+| `SIEVE_M3_MULT` | 90 | Direct-sieve cutoff used by the optional finalized block walk, in stencil periods. `-DSIEVE_M2_MULT=8 -DSIEVE_M3_MULT=12` gives an L1-sized configuration for small machines. |
+| `SIEVE_FINALIZE_BLOCK_WALK` | 0 | Use the older rolling block walk for separately finalized Mobius sieves. The newer tiled path is 1.5-8.9% faster on the M3 Ultra across tested segment sizes and sieve heights; retain this switch for retesting on other hardware. |
 | `SIEVE_FUSED_FINALIZE` | 1 | Folds the byte-log finalization into the Mertens prefix scan instead of running a separate pass over the segment. |
 | `LP_ROUTE_THRESHOLD` | 0 on ARM, 15000 on x86 | Scheduler-construction routing: when `numSegments * LP_ROUTE_THRESHOLD >= numLargePrimes`, the first-hit scan is done in a single pass. See the comment in `SegmentedMobiusSieve.cpp`. |
 | `SIEVE_M1_MULT` | 8 | M1-stage unit size in stencil periods ($8 \times 13860 = 110{,}880$ bytes, sized for the tested 128 KB L1D). |
