@@ -39,14 +39,6 @@ static constexpr bool UseFinalizeBlockWalk = SIEVE_FINALIZE_BLOCK_WALK;
 #define SIEVE_TWO_PASS 0
 #endif
 
-// Multiples of 4 are already squareful in the stencil.  Skip scheduling those
-// future bucket events; adding an odd bucket prime cannot land on another one.
-static inline UInt64 skipStencilSquare4(UInt64 m, UInt64 p) noexcept {
-    if (__builtin_expect((m & 3) == 0, false))
-        m += p;
-    return m;
-}
-
 // Adaptive threshold for large-prime routing strategy.
 // When numSegments * LP_ROUTE_THRESHOLD >= numLargePrimes, use single-pass
 // serial routing (Option A); otherwise use parallel per-thread constructors.
@@ -312,7 +304,7 @@ void SegmentedMobiusSieveCore::sieve(UInt64 lo, UInt64 hi, const std::vector<UIn
                         } else {
                             m = p * (((threadLo - 1) / p) + 1);
                         }
-                        m = skipStencilSquare4(m, p);
+                        m = LargePrimeHitScheduler::skipStencilSquare4(m, p);
                         if (m > threadHi)
                             continue;
 
@@ -1166,6 +1158,16 @@ void SegmentedMobiusSieveCore::finalizeMu(Int8* __restrict Mu, UInt64 lo, UInt64
 // LargePrimeHitScheduler — bucket sieve for primes > segment size
 // ============================================================================
 
+UInt64 SegmentedMobiusSieveCore::LargePrimeHitScheduler::skipStencilSquare4(
+    UInt64 m, UInt64 p) noexcept {
+    // The ring was sized for a p-wide jump.  A skipped hit makes that 2p,
+    // so skip the skip when 2p is too large.
+    constexpr UInt64 maxSkipPrime = (LP_SIZE - 1) * M2 / 2;
+    if (__builtin_expect((m & 3) == 0, false) && p <= maxSkipPrime)
+        m += p;
+    return m;
+}
+
 SegmentedMobiusSieveCore::LargePrimeHitScheduler::LargePrimeHitScheduler(
     const UInt64& baseLo,
     const UInt64& lo,
@@ -1186,6 +1188,7 @@ SegmentedMobiusSieveCore::LargePrimeHitScheduler::LargePrimeHitScheduler(
     , mP(primes.data())
     , mPInd0(pInd0)
     , mPInd1(pInd1)
+    , mAllSkipsFit(static_cast<UInt64>(primes[pInd1]) <= (LP_SIZE - 1) * M2 / 2)
     , mBuckets(lpBucket)
     , mCache(cache)
 {
@@ -1235,6 +1238,7 @@ SegmentedMobiusSieveCore::LargePrimeHitScheduler::LargePrimeHitScheduler(
     , mP(primes.data())
     , mPInd0(pInd0)
     , mPInd1(pInd1)
+    , mAllSkipsFit(static_cast<UInt64>(primes[pInd1]) <= (LP_SIZE - 1) * M2 / 2)
     , mBuckets(lpBucket)
     , mCache(cache)
 {
@@ -1299,7 +1303,8 @@ SegmentedMobiusSieveCore::LargePrimeHitScheduler::packEntry(UInt32 p, UInt64 off
 #endif
 }
 
-void SegmentedMobiusSieveCore::LargePrimeHitScheduler::sieveSubSegment(
+template<bool AllSkipsFit>
+void SegmentedMobiusSieveCore::LargePrimeHitScheduler::sieveSubSegmentImpl(
     Int8* __restrict muBase) noexcept {
     if (__builtin_expect(mCurrentSubSegIndex > mFinalSubSegIndex, false)) {
         return;
@@ -1355,7 +1360,13 @@ void SegmentedMobiusSieveCore::LargePrimeHitScheduler::sieveSubSegment(
             muBase[base + (m - L)] += SegmentedMobiusSieveCore::primeLogWeight(
                 static_cast<UInt32>(p)
             );
-            const UInt64 nextM = skipStencilSquare4(m + p, p);
+            UInt64 nextM = m + p;
+            if constexpr (AllSkipsFit) {
+                if (__builtin_expect((nextM & 3) == 0, false))
+                    nextM += p;
+            } else {
+                nextM = skipStencilSquare4(nextM, p);
+            }
             if (nextM <= mHi)
                 bucketPush((nextM - mLo) / M2, (EntryT)p);
         }
@@ -1382,10 +1393,18 @@ void SegmentedMobiusSieveCore::LargePrimeHitScheduler::sieveSubSegment(
             // M2 is divisible by 4, so the absolute residue depends only on
             // mLo and noff.  A second packed step skips the squareful hit.
             if (__builtin_expect(((mLo + noff) & 3) == 0, false)) {
-                noff += r;
-                const UInt64 carry2 = noff >= M2;
-                noff -= M2 & (UInt64(0) - carry2);
-                nSubSeg += s + carry2;
+                bool canSkip = true;
+                if constexpr (!AllSkipsFit) {
+                    constexpr UInt64 maxSkipStride = (LP_SIZE - 1) / 2;
+                    canSkip = s < maxSkipStride
+                           || (s == maxSkipStride && r <= M2 / 2);
+                }
+                if (canSkip) {
+                    noff += r;
+                    const UInt64 carry2 = noff >= M2;
+                    noff -= M2 & (UInt64(0) - carry2);
+                    nSubSeg += s + carry2;
+                }
             }
 
             if (nSubSeg < mFinalSubSegIndex || (nSubSeg == mFinalSubSegIndex && noff <= lastOff))
@@ -1412,10 +1431,18 @@ void SegmentedMobiusSieveCore::LargePrimeHitScheduler::sieveSubSegment(
             // M2 is divisible by 4, so the absolute residue depends only on
             // mLo and noff.  A second packed step skips the squareful hit.
             if (__builtin_expect(((mLo + noff) & 3) == 0, false)) {
-                noff += r;
-                const UInt64 carry2 = noff >= M2;
-                noff -= M2 & (UInt64(0) - carry2);
-                nSubSeg += s + carry2;
+                bool canSkip = true;
+                if constexpr (!AllSkipsFit) {
+                    constexpr UInt64 maxSkipStride = (LP_SIZE - 1) / 2;
+                    canSkip = s < maxSkipStride
+                           || (s == maxSkipStride && r <= M2 / 2);
+                }
+                if (canSkip) {
+                    noff += r;
+                    const UInt64 carry2 = noff >= M2;
+                    noff -= M2 & (UInt64(0) - carry2);
+                    nSubSeg += s + carry2;
+                }
             }
 
             if (nSubSeg < mFinalSubSegIndex || (nSubSeg == mFinalSubSegIndex && noff <= lastOff))
@@ -1427,4 +1454,16 @@ void SegmentedMobiusSieveCore::LargePrimeHitScheduler::sieveSubSegment(
     }  // sub-bucket loop
 
     ++mCurrentSubSegIndex;
+}
+
+void SegmentedMobiusSieveCore::LargePrimeHitScheduler::sieveSubSegment(
+    Int8* __restrict muBase) noexcept {
+#if SIEVE_NARROW_ENTRY
+    if (__builtin_expect(mAllSkipsFit, true))
+        sieveSubSegmentImpl<true>(muBase);
+    else
+        sieveSubSegmentImpl<false>(muBase);
+#else
+    sieveSubSegmentImpl<false>(muBase);
+#endif
 }

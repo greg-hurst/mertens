@@ -204,10 +204,13 @@ private:
         UInt64 subSegIndexOf(const UInt64& x) const noexcept;
         bool emptySubSegment(const UInt64& subSeg) const noexcept;
         void bucketPush(const UInt64& subSeg, EntryT e) noexcept;
+        static UInt64 skipStencilSquare4(UInt64 m, UInt64 p) noexcept;
         // Pack (p, first-hit offset) into the entry layout above. Seed-time
         // only — the per-hit path forwards entries without repacking from p.
         static EntryT packEntry(UInt32 p, UInt64 off) noexcept;
         void sieveSubSegment(Int8* __restrict muBase) noexcept;
+        template<bool AllSkipsFit>
+        void sieveSubSegmentImpl(Int8* __restrict muBase) noexcept;
 
         // Number of buckets in the circular buffer. Must be a power of 2
         // because bucket indexing uses (subSeg & (LP_SIZE - 1)) as a fast modulo.
@@ -259,6 +262,7 @@ private:
         UInt64 mCurrentSubSegIndex;
         const UInt32* mP;
         const UInt32 mPInd0, mPInd1;
+        const bool mAllSkipsFit;
         std::vector<PVecT>& mBuckets;
         const SieveQuotientCache* mCache;
     };
