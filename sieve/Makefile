@@ -15,16 +15,17 @@ endif
 # Override with: make BUCKET_SIEVE=0
 BUCKET_SIEVE ?= 1
 
-# --- Sub-buckets: L1-banded hit application in the bucket scheduler ---
-# Override with: make SUB_BUCKETS=0  (band width: make SUB_SHIFT=15)
+# --- Sub-buckets: cache-banded hit application in the bucket scheduler ---
+# Wide entries use SUB_SHIFT; narrow entries use NARROW_SUB_SHIFT.
+# Override with: make SUB_BUCKETS=0
 SUB_BUCKETS ?= 1
 SUB_SHIFT   ?= 17
+NARROW_SUB_SHIFT ?= 16
 
 # --- Bucket entry layout: 1 = narrow/prime-only/divide-per-hit (DEFAULT, 4 B;
-# sub-buckets auto-off), 0 = wide/packed/divide-free (8 B). Narrow wins at
-# scale on many-core ARM; on x86 the per-hit divide is costlier, so a wide
-# build with SUB_BUCKETS=0 may be better — re-measure there. See
-# PERFORMANCE.md section 6.
+# current hits transiently cache-banded), 0 = wide/packed/divide-free (8 B).
+# Narrow wins at scale on many-core ARM; on x86 the per-hit divide is costlier,
+# so re-measure there. See PERFORMANCE.md section 6.
 NARROW_ENTRY ?= 1
 
 # --- Base flags (all platforms) ---
@@ -37,6 +38,7 @@ CXXFLAGS := -O3 -std=c++17 \
             -DUSE_BUCKET_SIEVE=$(BUCKET_SIEVE) \
             -DSIEVE_SUB_BUCKETS=$(SUB_BUCKETS) \
             -DSIEVE_SUB_SHIFT=$(SUB_SHIFT) \
+            -DSIEVE_NARROW_SUB_SHIFT=$(NARROW_SUB_SHIFT) \
             -DSIEVE_NARROW_ENTRY=$(NARROW_ENTRY)
 
 # Extra defines, e.g. make EXTRA_CXXFLAGS="-DSIEVE_LP_SIZE=1024 -DSIEVE_STRIDE_LOG=7"

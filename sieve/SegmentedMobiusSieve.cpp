@@ -1353,7 +1353,40 @@ void SegmentedMobiusSieveCore::LargePrimeHitScheduler::sieveSubSegmentImpl(
         // recomputes the offset, CLZ recomputes the log weight. The quotient
         // cache cannot help — it is keyed by prime index, which the entry
         // does not store, and carrying the index would grow the entry back
-        // toward 8 bytes. No prefetch (the target needs the divide).
+        // toward 8 bytes.
+#if SIEVE_NARROW_SUBS_ACTIVE
+        // Decode and forward the prime stream first, staging each current hit
+        // by its offset band. The second pass then applies cache-local mu RMWs.
+        for (size_t i = 0; i < n; ++i) {
+            const UInt64 p = e[i];
+            const UInt64 m = p * ((L - 1) / p + 1);
+            const UInt64 off = m - L;
+            const UInt32 hit = static_cast<UInt32>(off)
+                | (static_cast<UInt32>(SegmentedMobiusSieveCore::primeLogWeight(
+                       static_cast<UInt32>(p))) << LP_OFF_BITS);
+            mTransientHits[off >> LP_TRANSIENT_SHIFT].push_back(hit);
+
+            UInt64 nextM = m + p;
+            if constexpr (AllSkipsFit) {
+                if (__builtin_expect((nextM & 3) == 0, false))
+                    nextM += p;
+            } else {
+                nextM = skipStencilSquare4(nextM, p);
+            }
+            if (nextM <= mHi)
+                bucketPush((nextM - mLo) / M2, (EntryT)p);
+        }
+
+        for (TransientHitVecT& hits : mTransientHits) {
+            for (const UInt32 hit : hits) {
+                muBase[base + (hit & LP_OFF_MASK)]
+                    += static_cast<Int8>(hit >> LP_OFF_BITS);
+            }
+            hits.clear();
+        }
+#else
+        // Without offset bands, apply each random target immediately. No
+        // useful target prefetch is available before the divide computes it.
         for (size_t i = 0; i < n; ++i) {
             const UInt64 p = e[i];
             const UInt64 m = p * ((L - 1) / p + 1);   // smallest multiple of p >= L
@@ -1370,6 +1403,7 @@ void SegmentedMobiusSieveCore::LargePrimeHitScheduler::sieveSubSegmentImpl(
             if (nextM <= mHi)
                 bucketPush((nextM - mLo) / M2, (EntryT)p);
         }
+#endif
 #elif SIEVE_TWO_PASS
         // Pass 1: apply all mu RMWs — a pure scatter loop, so the out-of-order
         // window holds the maximum number of outstanding misses.

@@ -161,10 +161,15 @@ branchless Bresenham step with no per-hit divide — but the doubled entry
 stream is what saturates memory bandwidth at scale. Measured head-to-head on
 the 32-thread M3 Ultra: narrow wins by up to ~22% at $10^{16}$ with the gap
 growing, the crossover is near $3 \times 10^{14}$, and narrow is at most ~2%
-slower on the cheap decades below that. Sub-buckets band on the stored
-offset, so they exist only in wide builds. The trade-off is machine-specific:
-on x86 the per-hit divide is costlier, so a wide build with `SUB_BUCKETS=0`
-may win — re-measure before trusting the ARM-tuned default.
+slower on the cheap decades below that. Wide entries are persistently grouped
+by their stored offset. Narrow entries retain the 4-byte ring format and group
+only the current decoded hits into transient 64 KB bands before applying their
+$\mu$ updates. This improves cache locality without doubling persistent entry
+traffic. On the M3 Ultra this reduces production-sized bucket-heavy segments
+by roughly 4%; very small segments can instead lose slightly because the
+temporary-vector overhead is not sufficiently amortized. The trade-off remains
+machine-specific: on x86 the per-hit divide is costlier, so re-measure before
+trusting the ARM-tuned default.
 
 ---
 

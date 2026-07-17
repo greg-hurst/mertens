@@ -30,6 +30,7 @@
 #include "simd_defs.h"
 #include "QuotientCache.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <utility>
@@ -145,8 +146,9 @@ private:
         // Bucket entry layout (-DSIEVE_NARROW_ENTRY=0|1):
         //   narrow (default): the entry IS the prime (UInt32). The offset is
         //     recomputed per sub-segment by one divide, the log weight by CLZ.
-        //     Half the entry-stream footprint; sub-buckets forced off. Wins
-        //     in the bandwidth-bound many-core regime (~20% at 10^16).
+        //     Half the persistent entry-stream footprint. Current hits are
+        //     transiently grouped into cache-sized offset bands before their
+        //     mu updates. Wins in the bandwidth-bound many-core regime.
         //   wide: self-contained 64-bit entry — bits 0..20 off, 21..41 p mod
         //     M2, 42..51 p / M2, 52..57 log weight. Forwarding is a branchless
         //     Bresenham step: cheapest per hit, but the 8-byte entry stream
@@ -229,17 +231,14 @@ private:
         static_assert(LP_SIZE <= LP_S_MASK + 1,
                       "stride field must hold p / M2 for the largest schedulable prime");
 
-        // Sub-buckets (default ON; disable with -DSIEVE_SUB_BUCKETS=0):
-        // split each sub-segment's bucket into LP_SUBS sub-buckets banded by
-        // offset high bits, so hits land in 2^LP_SUB_SHIFT-byte windows and
-        // the mu RMW lines stay in L1 across a band (~5-10% end-to-end
-        // in bucket-heavy regimes, bit-exact either way). 17 matches Apple's
-        // 128 KB L1D; on smaller-L1 x86 cores try 14..16.
+        // Offset bands (default ON; disable with -DSIEVE_SUB_BUCKETS=0) keep
+        // the mu RMW lines cache-local. Wide entries store their offset, so
+        // the persistent ring itself is split into LP_SUBS bands. Narrow
+        // entries remain prime-only in the ring and transiently group only
+        // the current sub-segment's decoded hits below.
 #ifndef SIEVE_SUB_BUCKETS
 #define SIEVE_SUB_BUCKETS 1
 #endif
-        // Sub-buckets band by the hit offset, which the narrow entry does not
-        // store — so they are available only in the wide build.
 #if SIEVE_SUB_BUCKETS && !SIEVE_NARROW_ENTRY
 #ifndef SIEVE_SUB_SHIFT
 #define SIEVE_SUB_SHIFT 17
@@ -254,6 +253,26 @@ private:
 #endif
         static constexpr UInt64 LP_NBUCKETS = LP_SIZE * LP_SUBS;
 
+        // Narrow entries cannot be persistently offset-banded without growing
+        // beyond four bytes. Materialize the current hit as (offset, log
+        // weight) instead, then apply those hits in cache-sized bands. The
+        // transient vectors retain their capacity between sub-segments.
+#if SIEVE_SUB_BUCKETS && SIEVE_NARROW_ENTRY
+#ifndef SIEVE_NARROW_SUB_SHIFT
+#define SIEVE_NARROW_SUB_SHIFT 16
+#endif
+        static_assert(SIEVE_NARROW_SUB_SHIFT > 0
+                   && SIEVE_NARROW_SUB_SHIFT <= LP_OFF_BITS,
+                      "narrow sub-bucket shift must fit the offset field");
+        static constexpr int LP_TRANSIENT_SHIFT = SIEVE_NARROW_SUB_SHIFT;
+        static constexpr UInt64 LP_TRANSIENT_SUBS =
+            UInt64(1) << (LP_OFF_BITS - LP_TRANSIENT_SHIFT);
+        using TransientHitVecT = std::vector<UInt32>;
+#define SIEVE_NARROW_SUBS_ACTIVE 1
+#else
+#define SIEVE_NARROW_SUBS_ACTIVE 0
+#endif
+
         // Ring slot for an entry headed to `subSeg` (sub-bucket from its offset).
         static UInt64 ringIndex(const UInt64& subSeg, EntryT e) noexcept;
 
@@ -264,6 +283,9 @@ private:
         const UInt32 mPInd0, mPInd1;
         const bool mAllSkipsFit;
         std::vector<PVecT>& mBuckets;
+#if SIEVE_NARROW_SUBS_ACTIVE
+        std::array<TransientHitVecT, LP_TRANSIENT_SUBS> mTransientHits;
+#endif
         const SieveQuotientCache* mCache;
     };
 
