@@ -39,6 +39,14 @@ static constexpr bool UseFinalizeBlockWalk = SIEVE_FINALIZE_BLOCK_WALK;
 #define SIEVE_TWO_PASS 0
 #endif
 
+// Multiples of 4 are already squareful in the stencil.  Skip scheduling those
+// future bucket events; adding an odd bucket prime cannot land on another one.
+static inline UInt64 skipStencilSquare4(UInt64 m, UInt64 p) noexcept {
+    if (__builtin_expect((m & 3) == 0, false))
+        m += p;
+    return m;
+}
+
 // Adaptive threshold for large-prime routing strategy.
 // When numSegments * LP_ROUTE_THRESHOLD >= numLargePrimes, use single-pass
 // serial routing (Option A); otherwise use parallel per-thread constructors.
@@ -304,6 +312,7 @@ void SegmentedMobiusSieveCore::sieve(UInt64 lo, UInt64 hi, const std::vector<UIn
                         } else {
                             m = p * (((threadLo - 1) / p) + 1);
                         }
+                        m = skipStencilSquare4(m, p);
                         if (m > threadHi)
                             continue;
 
@@ -1197,6 +1206,7 @@ SegmentedMobiusSieveCore::LargePrimeHitScheduler::LargePrimeHitScheduler(
         } else {
             m = p * (((L - 1) / p) + 1);
         }
+        m = skipStencilSquare4(m, p);
         const UInt64 subSeg = subSegIndexOf(m);
         if (subSeg < mFinalSubSegIndex || (subSeg == mFinalSubSegIndex && m <= mHi))
             bucketPush(subSeg, packEntry(p, (m - mLo) - subSeg * M2));
@@ -1345,7 +1355,7 @@ void SegmentedMobiusSieveCore::LargePrimeHitScheduler::sieveSubSegment(
             muBase[base + (m - L)] += SegmentedMobiusSieveCore::primeLogWeight(
                 static_cast<UInt32>(p)
             );
-            const UInt64 nextM = m + p;
+            const UInt64 nextM = skipStencilSquare4(m + p, p);
             if (nextM <= mHi)
                 bucketPush((nextM - mLo) / M2, (EntryT)p);
         }
@@ -1362,11 +1372,21 @@ void SegmentedMobiusSieveCore::LargePrimeHitScheduler::sieveSubSegment(
         // stream is cache-hot from pass 1.
         for (size_t i = 0; i < n; ++i) {
             const EntryT entry = e[i];
-            UInt64 noff = (entry & LP_OFF_MASK) + ((entry >> LP_R_SHIFT) & LP_OFF_MASK);
+            const UInt64 r = (entry >> LP_R_SHIFT) & LP_OFF_MASK;
+            const UInt64 s = (entry >> LP_S_SHIFT) & LP_S_MASK;
+            UInt64 noff = (entry & LP_OFF_MASK) + r;
             const UInt64 carry = noff >= M2;
             noff -= M2 & (UInt64(0) - carry);
-            const UInt64 nSubSeg = mCurrentSubSegIndex
-                                + ((entry >> LP_S_SHIFT) & LP_S_MASK) + carry;
+            UInt64 nSubSeg = mCurrentSubSegIndex + s + carry;
+
+            // M2 is divisible by 4, so the absolute residue depends only on
+            // mLo and noff.  A second packed step skips the squareful hit.
+            if (__builtin_expect(((mLo + noff) & 3) == 0, false)) {
+                noff += r;
+                const UInt64 carry2 = noff >= M2;
+                noff -= M2 & (UInt64(0) - carry2);
+                nSubSeg += s + carry2;
+            }
 
             if (nSubSeg < mFinalSubSegIndex || (nSubSeg == mFinalSubSegIndex && noff <= lastOff))
                 bucketPush(nSubSeg, (entry & ~LP_OFF_MASK) | noff);
@@ -1382,11 +1402,21 @@ void SegmentedMobiusSieveCore::LargePrimeHitScheduler::sieveSubSegment(
             muBase[base + off] += (Int8)(entry >> LP_LOG_SHIFT);
 
             // The carry is data-random (~50/50), so keep it branchless.
-            UInt64 noff = off + ((entry >> LP_R_SHIFT) & LP_OFF_MASK);
+            const UInt64 r = (entry >> LP_R_SHIFT) & LP_OFF_MASK;
+            const UInt64 s = (entry >> LP_S_SHIFT) & LP_S_MASK;
+            UInt64 noff = off + r;
             const UInt64 carry = noff >= M2;
             noff -= M2 & (UInt64(0) - carry);
-            const UInt64 nSubSeg = mCurrentSubSegIndex
-                                + ((entry >> LP_S_SHIFT) & LP_S_MASK) + carry;
+            UInt64 nSubSeg = mCurrentSubSegIndex + s + carry;
+
+            // M2 is divisible by 4, so the absolute residue depends only on
+            // mLo and noff.  A second packed step skips the squareful hit.
+            if (__builtin_expect(((mLo + noff) & 3) == 0, false)) {
+                noff += r;
+                const UInt64 carry2 = noff >= M2;
+                noff -= M2 & (UInt64(0) - carry2);
+                nSubSeg += s + carry2;
+            }
 
             if (nSubSeg < mFinalSubSegIndex || (nSubSeg == mFinalSubSegIndex && noff <= lastOff))
                 bucketPush(nSubSeg, (entry & ~LP_OFF_MASK) | noff);
