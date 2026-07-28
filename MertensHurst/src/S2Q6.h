@@ -17,6 +17,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
+#include <limits>
+#include <type_traits>
 
 struct S2Q6Spec {
     using Mode = S2Q6Modes::Mode;
@@ -28,6 +31,89 @@ struct S2Q6Spec {
         template<typename T>
         static inline T eval(T q) {
             return S2Q6Modes::Term<M, T>::eval(q);
+        }
+    };
+
+    // Every generated denominator divides 36.  On the dominant UInt128
+    // fixed-stride path, the more involved modes are cheaper as an exact
+    // period-36 quasi-polynomial than as several independent constant
+    // quotients.  Keep the three simple modes in their existing form.
+    template<Mode M>
+    struct FixedStrideEvaluator {
+        static constexpr bool UsePeriod36 =
+            M != Mode::M15 && M != Mode::M24 && M != Mode::M25;
+
+        inline static constexpr bool PeriodIsValid = [] {
+            constexpr std::size_t modeIndex = static_cast<std::size_t>(M);
+            for (std::size_t basis = 0; basis < BasisCount; ++basis) {
+                if (36 % S2Q6Modes::kDenominators[basis] != 0)
+                    return false;
+            }
+            for (std::size_t remainder = 0; remainder < 36; ++remainder) {
+                Int64 value = 0;
+                for (std::size_t basis = 0; basis < BasisCount; ++basis) {
+                    value += Int64(
+                        S2Q6Modes::kCoefficients[modeIndex][basis]
+                    ) * Int64(
+                        remainder / S2Q6Modes::kDenominators[basis]
+                    );
+                }
+                if (value < std::numeric_limits<Int8>::min()
+                    || value > std::numeric_limits<Int8>::max())
+                    return false;
+            }
+            return true;
+        }();
+        static_assert(
+            !UsePeriod36 || PeriodIsValid,
+            "period-36 evaluator requires exact Int8 remainder tables"
+        );
+
+        inline static constexpr Int64 PeriodSlope = [] {
+            Int64 slope = 0;
+            constexpr std::size_t modeIndex = static_cast<std::size_t>(M);
+            for (std::size_t basis = 0; basis < BasisCount; ++basis) {
+                slope += Int64(S2Q6Modes::kCoefficients[modeIndex][basis])
+                    * Int64(36 / S2Q6Modes::kDenominators[basis]);
+            }
+            return slope;
+        }();
+
+        inline static constexpr std::array<Int8, 36> PeriodRemainders = [] {
+            std::array<Int8, 36> remainders{};
+            constexpr std::size_t modeIndex = static_cast<std::size_t>(M);
+            for (std::size_t remainder = 0;
+                 remainder < remainders.size();
+                 ++remainder) {
+                Int64 value = 0;
+                for (std::size_t basis = 0; basis < BasisCount; ++basis) {
+                    value += Int64(
+                        S2Q6Modes::kCoefficients[modeIndex][basis]
+                    ) * Int64(
+                        remainder / S2Q6Modes::kDenominators[basis]
+                    );
+                }
+                remainders[remainder] = static_cast<Int8>(value);
+            }
+            return remainders;
+        }();
+
+        template<typename T>
+        static inline T eval(T quotient) {
+            static_assert(
+                std::is_same_v<T, Int64>,
+                "fixed-stride evaluator requires a nonnegative Int64 quotient"
+            );
+            assert(quotient >= 0);
+            if constexpr (!UsePeriod36) {
+                return S2Q6Modes::Term<M, T>::eval(quotient);
+            } else {
+                const UInt64 q = static_cast<UInt64>(quotient);
+                const UInt64 blocks = q / 36;
+                const UInt64 remainder = q - blocks * 36;
+                return T(PeriodSlope) * T(blocks)
+                    + T(PeriodRemainders[remainder]);
+            }
         }
     };
 
@@ -98,8 +184,10 @@ __attribute__((noinline)) static Int128 updateMode128(
     UInt64 step6Boundary
 ) {
     using Evaluator = typename Spec::template Evaluator<Mode>;
+    using FixedStrideEvaluator =
+        typename Spec::template FixedStrideEvaluator<Mode>;
     Int128 result = 0;
-    update_S2_128_wheel6<Evaluator>(
+    update_S2_128_wheel6<Evaluator, FixedStrideEvaluator>(
         n, L1, lo, hi, Mu, cbrt2nCeil, step6Boundary, result
     );
     return result;

@@ -328,7 +328,7 @@ static inline void sum_fast_range_S2_128_step6_eval(
 // 128-bit S2: dispatcher combining small + fast ranges
 // ============================================================================
 
-template<typename Evaluator>
+template<typename Evaluator, typename FixedStrideEvaluator = Evaluator>
 static inline void update_S2_128_wheel6(
     UInt128 n,
     UInt64 L1,
@@ -364,7 +364,7 @@ static inline void update_S2_128_wheel6(
     }
 
     if (step6From <= hi) {
-        sum_fast_range_S2_128_step6_eval<Evaluator>(
+        sum_fast_range_S2_128_step6_eval<FixedStrideEvaluator>(
             n, Mu, L1, step6From, hi, sum
         );
     }
