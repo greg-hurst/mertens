@@ -228,10 +228,10 @@ M(20) = -3
 
 ## Range limits
 
-With default settings, the effective sieve limit is $2.06 \times 10^{17}$ (bucket scheduler constraint). Building with `BUCKET_SIEVE=0` raises this to $\sim 1.8 \times 10^{19}$ (encoding byte-overflow / UInt32 prime cap). See [PERFORMANCE.md](PERFORMANCE.md) for the full analysis of each constraint:
+With default settings, the effective sieve limit is $2.05 \times 10^{17}$ (bucket scheduler constraint). Building with `BUCKET_SIEVE=0` raises this to $\sim 1.8 \times 10^{19}$ (encoding byte-overflow / UInt32 prime cap). See [PERFORMANCE.md](PERFORMANCE.md) for the full analysis of each constraint:
 
 - **Log-prime encoding** — the uniform ceil-log2 scheme is collision-free; the only cap is the 7-bit field overflowing, at $N < 2^{64} \approx 1.8 \times 10^{19}$ (§5)
-- **Bucket scheduler** — `LP_SIZE = 512` limits range to $\sim 2.06 \times 10^{17}$ (§6)
+- **Bucket scheduler** — `LP_SIZE = 512` limits range to $\sim 2.05 \times 10^{17}$ (§6)
 - **UInt32 primes** — caps sieve endpoint at $\sim 1.8 \times 10^{19}$ (§7)
 - **Int8 residual overflow** — compressed Mertens safe to $\sim 1.9 \times 10^{25}$ at default `STRIDE_LOG=8` (§8)
 

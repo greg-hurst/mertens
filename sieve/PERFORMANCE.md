@@ -133,11 +133,11 @@ So there is **no collision bound** in the sense of the earlier floor/`numbits` s
 
 ### Capacity
 
-The bucket scheduler uses `LP_SIZE = 512` buckets with sub-segment length $M_2 = 887{,}040$. The scheduler must satisfy $\sqrt{u} < \texttt{LP\_SIZE} \times M_2$, since $\sqrt{u}$ is the largest prime that can appear in the segmented sieve. In the record implementation these constants were `LP_SIZE` $= 512$ and $M_2 = 887{,}040$; changing the sub-segment size or scheduler capacity changes the supported range accordingly.
+The bucket scheduler uses `LP_SIZE = 512` buckets with sub-segment length $M_2 = 887{,}040$. The largest schedulable prime is $(\texttt{LP\_SIZE} - 1) \times M_2$, since $\sqrt{u}$ is the largest prime that can appear in the segmented sieve. In the record implementation these constants were `LP_SIZE` $= 512$ and $M_2 = 887{,}040$; changing the sub-segment size or scheduler capacity changes the supported range accordingly.
 
-$$\sqrt{N} < 512 \times 887{,}040 = 454{,}164{,}480 \implies N < 2.06 \times 10^{17}$$
+$$\sqrt{N} \le 511 \times 887{,}040 = 453{,}277{,}440 \implies N \le 205{,}460{,}437{,}612{,}953{,}600 \approx 2.05 \times 10^{17}$$
 
-For larger ranges, build with `-DSIEVE_LP_SIZE=1024`, which raises the limit to $\sim 8.25 \times 10^{17}$ (still below the encoding overflow cap of §5). Alternatively, building with `BUCKET_SIEVE=0` disables the scheduler entirely; all primes use direct iteration, which removes this constraint but is slower.
+For larger ranges, build with `-DSIEVE_LP_SIZE=1024`, which raises the limit to $(1023 \times 887{,}040)^2 \approx 8.23 \times 10^{17}$ (still below the encoding overflow cap of §5). Alternatively, building with `BUCKET_SIEVE=0` disables the scheduler entirely; all primes use direct iteration, which removes this constraint but is slower.
 
 When the sieve is used inside MertensHurst with the default $u(n)$ formula (`fac` $= 0.75$ at scale), this supports inputs to roughly $n = 5.9 \times 10^{26}$ (the figure quoted in the paper), comfortably above the tested $10^{25}$.
 
@@ -175,7 +175,7 @@ trusting the ARM-tuned default.
 
 ## 7. UInt32 prime storage
 
-Primes are stored as `UInt32`, which caps them at $\sim 4.29 \times 10^9$. Since the largest prime sieved is $\sqrt{N}$, this limits the sieve endpoint to $N < (2^{32} - 1)^2 \approx 1.8 \times 10^{19}$. This is well above the bucket scheduler bound ($2.06 \times 10^{17}$), and with the ceil encoding of §5 there is no separate collision cap below $2^{64}$, so it is never the binding constraint in practice.
+Primes are stored as `UInt32`, which caps them at $\sim 4.29 \times 10^9$. Since the largest prime sieved is $\sqrt{N}$, this limits the sieve endpoint to $N < (2^{32} - 1)^2 \approx 1.8 \times 10^{19}$. This is well above the bucket scheduler bound ($2.05 \times 10^{17}$), and with the ceil encoding of §5 there is no separate collision cap below $2^{64}$, so it is never the binding constraint in practice.
 
 ---
 
@@ -235,8 +235,8 @@ The binding constraint depends on configuration:
 | Constraint | Limit | Binding when |
 |------------|-------|-------------|
 | Log-encoding byte overflow | $\sim 1.8 \times 10^{19}$ ($N < 2^{64}$) | Fundamental encoding limit (ceil scheme, §5) |
-| Bucket scheduler (`LP_SIZE=512`) | $2.06 \times 10^{17}$ | `BUCKET_SIEVE=1` (default) |
+| Bucket scheduler (`LP_SIZE=512`) | $2.05 \times 10^{17}$ | `BUCKET_SIEVE=1` (default) |
 | UInt32 primes | $1.8 \times 10^{19}$ | `BUCKET_SIEVE=0` (co-binding with the encoding) |
 | Int8 residual (`STRIDE_LOG=8`) | $1.9 \times 10^{25}$ | Compressed Mertens only |
 
-With default settings, the bucket scheduler is the most restrictive at $2.06 \times 10^{17}$. Building with `BUCKET_SIEVE=0` raises the effective limit to $\sim 1.8 \times 10^{19}$ (the encoding and UInt32 prime caps, which coincide in order of magnitude). The uniform ceil-log2 encoding (§5) is collision-free, so unlike the earlier mixed floor/`numbits` scheme there is no $1.157 \times 10^{18}$ cap.
+With default settings, the bucket scheduler is the most restrictive at $2.05 \times 10^{17}$. Building with `BUCKET_SIEVE=0` raises the effective limit to $\sim 1.8 \times 10^{19}$ (the encoding and UInt32 prime caps, which coincide in order of magnitude). The uniform ceil-log2 encoding (§5) is collision-free, so unlike the earlier mixed floor/`numbits` scheme there is no $1.157 \times 10^{18}$ cap.

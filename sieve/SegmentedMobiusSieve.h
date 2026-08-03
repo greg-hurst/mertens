@@ -87,11 +87,11 @@ public:
     // For use with sieve(), pass at least primesUpTo(max(MIN_PRIMES_BOUND, sqrt(hi))).
     static std::vector<UInt32> primesUpTo(UInt32 n);
 
-    // Largest prime the bucket scheduler can reach (LP_SIZE * M2). When the
-    // bucket scheduler is enabled, the sieve endpoint must satisfy
-    // sqrt(u) < schedulerReach() — see MertensHurst/INPUT_BOUNDS.md.
+    // Largest prime the bucket scheduler can reach ((LP_SIZE - 1) * M2).
+    // When the bucket scheduler is enabled, the sieve endpoint must satisfy
+    // sqrt(u) <= schedulerReach() — see MertensHurst/INPUT_BOUNDS.md.
     static constexpr UInt64 schedulerReach() {
-        return LargePrimeHitScheduler::LP_SIZE * M2;
+        return (LargePrimeHitScheduler::LP_SIZE - 1) * M2;
     }
 
 private:
@@ -215,19 +215,20 @@ private:
         void sieveSubSegmentImpl(Int8* __restrict muBase) noexcept;
 
         // Number of buckets in the circular buffer. Must be a power of 2
-        // because bucket indexing uses (subSeg & (LP_SIZE - 1)) as a fast modulo.
+        // because bucket indexing uses (subSeg & (LP_SIZE - 1)) as a fast
+        // modulo, and at least 2 because schedulerReach() subtracts one bucket.
         //
-        // LP_SIZE bounds the largest schedulable prime: sqrt(u) < LP_SIZE * M2,
-        // so 512 covers u up to ~2.06e17. The wide entry's 10-bit stride field
-        // supports LP_SIZE up to exactly 1024, and doubling it is
-        // performance-neutral. 512 is the record-run configuration; see
+        // LP_SIZE bounds the largest schedulable prime to
+        // (LP_SIZE - 1) * M2, so 512 covers u up to ~2.05e17. The wide entry's
+        // 10-bit stride field supports LP_SIZE up to exactly 1024, and doubling
+        // it is performance-neutral. 512 is the record-run configuration; see
         // PERFORMANCE.md section 6 and Section 7 of the paper.
 #ifndef SIEVE_LP_SIZE
 #define SIEVE_LP_SIZE 512
 #endif
         static constexpr UInt64 LP_SIZE = SIEVE_LP_SIZE;
-        static_assert((LP_SIZE & (LP_SIZE - 1)) == 0,
-                      "LP_SIZE must be a power of two (bucket index uses masking)");
+        static_assert(LP_SIZE >= 2 && (LP_SIZE & (LP_SIZE - 1)) == 0,
+                      "LP_SIZE must be a power of two of at least 2");
         static_assert(LP_SIZE <= LP_S_MASK + 1,
                       "stride field must hold p / M2 for the largest schedulable prime");
 
@@ -294,7 +295,7 @@ private:
     // M1 ~ L1 cache, M2 ~ L2 cache, M3 = bucket sieve cutoff.
     // M2/M3 multipliers are build-time tunable (keep M3 ~ 1.4x M2):
     //   -DSIEVE_M2_MULT=8 -DSIEVE_M3_MULT=12 gives an L1-sized sub-segment.
-    // NOTE: shrinking M2 shrinks the scheduler capacity LP_SIZE * M2 and
+    // NOTE: shrinking M2 shrinks the scheduler capacity (LP_SIZE - 1) * M2 and
     // grows the per-entry stride field s = p / M2 — check both limits
     // (LP_S_MASK and the LP_SIZE comment) before production use.
 #ifndef SIEVE_M1_MULT

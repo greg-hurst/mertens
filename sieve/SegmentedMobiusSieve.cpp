@@ -165,7 +165,7 @@ void SegmentedMobiusSieveCore::sieve(UInt64 lo, UInt64 hi, const std::vector<UIn
         // The Granlund-Montgomery formulation with SHIFT=60 is exact only
         // for arguments below 2^60. ceilDiv computes val = x + p - 1 with
         // x <= hi and p < 2^32, so require hi < 2^60 - 2^32. The default
-        // bucket-sieve range cap (2.06e17) is far below this; only
+        // bucket-sieve range cap (2.05e17) is far below this; only
         // BUCKET_SIEVE=0 builds, where the encoding stays exact to ~1.8e19,
         // can reach it — those must use DIVISION_FREE=0 past this bound.
         assert(hi < (1ULL << 60) - (1ULL << 32) &&

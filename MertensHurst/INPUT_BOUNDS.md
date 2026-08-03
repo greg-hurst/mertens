@@ -44,7 +44,7 @@ $n$ is cast to `double` (53-bit mantissa) for `sqrt`, `cbrt`, and `log`. Precisi
 
 **Source:** `SegmentedMobiusSieve.h`
 
-The bucket scheduler for large primes uses a circular buffer of `LP_SIZE` buckets. The largest prime sieved is $\sqrt{u}$ and so we need `sqrt(u) < LP_SIZE * M2`, yielding $u = (512 \times 887\\,040)^2 \approx 2.06 \times 10^{17}$. (This is the configuration used for the record runs and described in Section 7 of the paper: `LP_SIZE = 512`, `M2 = 887,040`.)
+The bucket scheduler for large primes uses a circular buffer of `LP_SIZE` buckets. Its exact largest schedulable prime is `(LP_SIZE - 1) * M2`, so the runtime conservatively enforces $u \le (511 \times 887{,}040)^2 = 205{,}460{,}437{,}612{,}953{,}600 \approx 2.05 \times 10^{17}$. (This is the configuration used for the record runs and described in Section 7 of the paper: `LP_SIZE = 512`, `M2 = 887,040`.)
 
 With `fac == 0.75`: **max $n \approx 5.9 \times 10^{26}$** (the figure quoted in the paper). Build with `make EXTRA_CXXFLAGS=-DSIEVE_LP_SIZE=1024` to go higher (the default narrow entries store the prime as `UInt32`, and the wide packed payload supports `LP_SIZE` up to exactly 1024, so capacity is not payload-limited); the runtime cap on $u$ scales with the flag automatically. Alternatively, build with `make BUCKET_SIEVE=0` to disable the bucket scheduler entirely (all primes are sieved as medium primes via direct iteration), which removes this constraint.
 
@@ -62,7 +62,7 @@ $$u < 2^{60} - 2^{32} = 1\,152\,921\,500\,311\,879\,680 \approx 1.1529 \times 10
 
 Inverting the default $u(n)$ formula (`fac == 0.75` at this scale), the smallest input whose sieve range reaches this bound is **max $n \approx 7.9 \times 10^{27}$** — far tighter than the encoding/prime caps of constraints 5 and 8, so on `DIVISION_FREE=1` builds with the bucket scheduler disabled this constraint binds first.
 
-`SegmentedMobiusSieveCore::sieve()` asserts the bound at entry (active only in non-`NDEBUG` builds); it is not otherwise enforced at runtime, so on a `DIVISION_FREE=1` release build a manual $u$ above $2^{60} - 2^{32}$ computes incorrect quotients. In the default configuration this window is unreachable, since the bucket-scheduler cap of constraint 3 ($2.06 \times 10^{17}$) is enforced first. Build with `DIVISION_FREE=0` to remove this constraint entirely.
+`SegmentedMobiusSieveCore::sieve()` asserts the bound at entry (active only in non-`NDEBUG` builds); it is not otherwise enforced at runtime, so on a `DIVISION_FREE=1` release build a manual $u$ above $2^{60} - 2^{32}$ computes incorrect quotients. In the default configuration this window is unreachable, since the bucket-scheduler cap of constraint 3 ($2.05 \times 10^{17}$) is enforced first. Build with `DIVISION_FREE=0` to remove this constraint entirely.
 
 ---
 

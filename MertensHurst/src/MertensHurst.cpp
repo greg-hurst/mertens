@@ -265,7 +265,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         // ceil-log2 byte-encoding requirement u < 2^64.
         UInt64 uMax = 4294967295ULL * 4294967295ULL;
 #if USE_BUCKET_SIEVE
-        // Bucket scheduler reach: sqrt(u) < LP_SIZE * M2.
+        // Bucket scheduler reach: sqrt(u) <= (LP_SIZE - 1) * M2.
         constexpr UInt64 reach = SegmentedMobiusSieveCore::schedulerReach();
         uMax = std::min(uMax, reach * reach);
 #endif
