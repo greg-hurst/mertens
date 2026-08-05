@@ -9,7 +9,9 @@ the CPU implementations. It exists for exploration, and maybe a real
 implementation down the road.
 
 This directory keeps its own copy of the MertensHurst sources (`src/`) so the
-CPU tree stays GPU-free. Only the sieve is shared.
+CPU tree stays GPU-free. It is based on the `v1.0` tag and uses the original
+all-$Q=2$ S1/S2 path, not the current CPU implementation's outer-$Q=6$
+transforms. Only the sieve is shared, so current sieve changes also apply here.
 
 ## Platform
 
