@@ -27,6 +27,12 @@ SIEVE_BUCKET_NARROW_ENTRY ?= 1
 # a separate in-cache pass). Bit-identical M. Override with: make FUSED_FINALIZE=0
 FUSED_FINALIZE ?= 1
 
+# --- Final recovery (default: final value only) ---
+# When 1, recover every square-free partial value by back substitution.
+# The default obtains only M(n) by direct Mobius inversion. Override with:
+# make FULL_RECOVERY=1
+FULL_RECOVERY ?= 0
+
 # --- Inclusion-exclusion transform (default: outer Q=6 for S1 and S2) ---
 # `make q2` builds the original all-Q=2 implementation as a reference.
 S1_OUTER_Q6 ?= 1
@@ -43,6 +49,7 @@ CXXFLAGS := -O3 -std=c++17 \
             -DUSE_BUCKET_SIEVE=$(BUCKET_SIEVE) \
             -DSIEVE_NARROW_ENTRY=$(SIEVE_BUCKET_NARROW_ENTRY) \
             -DSIEVE_FUSED_FINALIZE=$(FUSED_FINALIZE) \
+            -DMERTENSHURST_FULL_RECOVERY=$(FULL_RECOVERY) \
             -DMERTENSHURST_S1_OUTER_Q6=$(S1_OUTER_Q6) \
             -DMERTENSHURST_S2_OUTER_Q6=$(S2_OUTER_Q6)
 

@@ -153,4 +153,4 @@ Each `partial_values[i]` accumulates the transformed $S_2$ and $S_1$ contributio
 
 ### Final recovery
 
-Production computes only $M(n)$ by a signed Möbius sum of the stored square-free partial values. Its accumulator therefore has the same scale as the partial-value state discussed above and is held in `Int128` whenever the leading partial values require it. The optional `MERTENSHURST_FULL_RECOVERY=1` oracle instead performs decreasing-index back substitution of every square-free value; its recovery sum is negligible relative to the earlier S1/S2 accumulations.
+Production computes only $M(n)$ by a signed Möbius sum of the stored square-free partial values. Its accumulator therefore has the same scale as the partial-value state discussed above and is held in `Int128` whenever the leading partial values require it. The optional `FULL_RECOVERY=1` build instead performs decreasing-index back substitution of every square-free value as a correctness oracle; its recovery sum is negligible relative to the earlier S1/S2 accumulations.
