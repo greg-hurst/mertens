@@ -69,7 +69,7 @@ $ ./build/mertens 10000000000
 M(10000000000) = -33722 in 0.011 seconds
 
 $ ./build/mertens 10000000000000000 --profile
-M(10000000000000000) = -3195437 in 7.1 seconds
+M(10000000000000000) = -3195437 in 2.0 seconds
 
 --------------- Loop 1 16-bit ---------------
 ...
@@ -97,13 +97,13 @@ INPUT_BOUNDS.md             Analysis of bounds on n
 COMPILE_FLAGS.md            What each build flag does
 src/
   MertensHurst.h            Public API: Int64 MertensHurst(UInt128 n)
-  MertensHurst.cpp          Algorithm orchestration (loops, back substitution)
+  MertensHurst.cpp          Algorithm orchestration (loops, final recovery)
   S1.h                      S1 summation functions (64-bit and 128-bit)
   S1Q6.h                    Exact outer-Q6 S1 transform kernels
   S2.h                      S2 summation functions (64-bit and 128-bit)
   S2Q6.h                    Exact outer-Q6 S2 dispatch
   S2Q6Modes.h               Static outer-Q6 S2 coefficient modes
-  OuterRecovery.h           Square-free back substitution
+  OuterRecovery.h           Final-value inversion and optional full recovery
   QuotientPredictor.h       Division-free quotient estimation
   main.cpp                  Driver program
 ../sieve/                   Shared segmented Mobius sieve (see sieve/README.md)

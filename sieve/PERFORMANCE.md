@@ -16,15 +16,15 @@ by Mertens' second theorem. The Mertens prefix sum adds a linear pass, so the ov
 
 When used inside the $O(n^{2/3})$ MertensHurst algorithm, the sieve range is $[1, u]$ where
 
-$$u = \left\lceil \texttt{fac} \cdot \left(\frac{n}{\ln \ln n}\right)^{\!2/3} \right\rceil, \qquad \texttt{fac} = \text{clamp}\!\left(1.85 - 0.05 \log_{10} n,\ 0.75,\ 1.05\right).$$
+$$u = \left\lceil \texttt{fac} \cdot \left(\frac{n}{\ln \ln n}\right)^{\!2/3} \right\rceil, \qquad \texttt{fac} = \text{clamp}\!\left(1.95 - 0.05 \log_{10} n,\ 0.75,\ 1.10\right).$$
 
-The factor $\texttt{fac}$ is $1.05$ for $n \le 10^{16}$ and decreases linearly in $\log_{10} n$ to $0.75$ at $n = 10^{22}$ and above, balancing sieve cost $O(u \log \log u)$ against the $S_1$/$S_2$ summation cost $O(n / \sqrt{u})$. The $\ln \ln n$ term in the denominator reflects that sieving becomes relatively cheaper at larger $n$ because each prime eliminates a $1/p$ fraction of positions, and the sum $\sum 1/p$ grows only as $\log \log n$.
+The factor $\texttt{fac}$ is $1.10$ for $n \le 10^{17}$ and decreases linearly in $\log_{10} n$ to $0.75$ at $n = 10^{24}$ and above, balancing sieve cost $O(u \log \log u)$ against the $S_1$/$S_2$ summation cost $O(n / \sqrt{u})$. The $\ln \ln n$ term in the denominator reflects that sieving becomes relatively cheaper at larger $n$ because each prime eliminates a $1/p$ fraction of positions, and the sum $\sum 1/p$ grows only as $\log \log n$.
 
 The sieve's contribution to total MertensHurst runtime is therefore $O\!\left((n / \ln \ln n)^{2/3} \cdot \log \log n\right) = O\!\left(n^{2/3} (\log \log n)^{1/3}\right)$.
 
 ### Empirical throughput
 
-The following timings were measured on an Apple M3 Ultra with `BUCKET_SIEVE=1` and OpenMP enabled.
+The following historical timings are from Table 5 of the paper and describe the `v1.0` implementation on an Apple M3 Ultra with `BUCKET_SIEVE=1` and OpenMP enabled. They are retained for comparison and are not current-branch benchmarks.
 
 Cumulative standalone times through the listed endpoint (Table 5 of the paper; segment sizes as listed there):
 
@@ -53,7 +53,7 @@ The `SegmentedMobiusSieveCore` maintains three buffers:
 | `mPreMu` | `Int8[]` | $M_1 + P$ bytes | Tiled stencil copy for Phase 1 (read-only after init) |
 | `mStencilData` | `Int8[]` | $P = 13{,}860$ bytes | Base stencil pattern (copied from `stencil_data.h`) |
 
-where $B$ is the user-specified segment size and $M_1 = 4P = 55{,}440$.
+where $B$ is the user-specified segment size and $M_1 = 8P = 110{,}880$.
 
 When the bucket scheduler is enabled, each OpenMP thread maintains its own array of `LP_SIZE = 512` bucket vectors. In the default narrow format (`SIEVE_NARROW_ENTRY=1`) each entry is a 4-byte prime and the hit offset is recomputed per hit; the wide format packs (offset, $p \bmod M_2$, $p / M_2$, log weight) into 8 bytes and is divide-free per hit (see §6). The total bucket memory depends on how many large primes land in each sub-segment, but is typically small relative to the sieve buffer.
 
@@ -84,7 +84,7 @@ For a $10^9$-element segment, the compressed mode uses approximately 1.03 GB (31
 
 ## 3. Stencil pre-sieve
 
-The first primes are handled by a stencil of period $P = 13{,}860 = \text{lcm}(4, 9, 5, 7, 11)$. A stencil of this period, pre-sieved by 2, 3, $2^2$, 5, 7, $3^2$, and 11, is computed once and then copied into each new segment. After the stencil has been copied, the small primes through 353 are applied by hardcoded unrolled loops. Medium primes begin at 359: M1 medium primes through `M1_CONSTANT_PRIME_CAP` use fully unrolled constant-stride tables, the remainder through `M1_PRIME_CAP` use a four-stream walk on M1 chunks, and tiled medium primes use wider direct-sieve tiles. Large primes are handled by the bucket scheduler below.
+The first primes are handled by a stencil of period $P = 13{,}860 = \text{lcm}(4, 9, 5, 7, 11)$. A stencil of this period, pre-sieved by 2, 3, $2^2$, 5, 7, $3^2$, and 11, is computed once and then copied into each new segment. After the stencil has been copied, the small primes through 353 are applied by hardcoded unrolled loops. Medium primes begin at 359: M1 medium primes through `SIEVE_M1_CONSTANT_PRIME_CAP` use fully unrolled constant-stride tables, the remainder through `SIEVE_M1_PRIME_CAP` use a four-stream walk on M1 chunks, and tiled medium primes use wider direct-sieve tiles. Large primes are handled by the bucket scheduler below.
 
 The five smallest primes account for the densest sieving work. Their combined period is small enough to fit in L1 cache (13,860 bytes) while eliminating the most expensive per-segment iterations. Adding 13 would increase the period to $180{,}180$, which is still feasible but offers diminishing returns since prime 13 only touches $1/13 \approx 7.7\%$ of positions.
 
@@ -104,15 +104,15 @@ The paper's small, medium, and large categories are implemented with the followi
 
 The M1-stage unit $M_1$ keeps its working set in L1 cache. $M_2$ balances per-sub-segment overhead against cache pressure for medium primes. The default tiled path uses a direct-sieve cutoff of $200P = 2{,}772{,}000$. The optional finalized rolling block walk (`SIEVE_FINALIZE_BLOCK_WALK=1`) retains its independently tunable $M_3 = 90P = 1{,}247{,}400$ cutoff.
 
-Primes 13 through 353 (indices 5 through 70 in a typical prime list) are sieved with manually unrolled constant-stride loops. By default, M1 medium primes 359 through 1,021 come from compact constant-prime tables that the compiler fully unrolls; primes 1,031 through `M1_PRIME_CAP` use the general log-prime encoding while walking four adjacent streams together. Override `SIEVE_M1_CONSTANT_PRIME_CAP` at compile time to retune this handoff from 353 through 2,039, for example with `make EXTRA_CXXFLAGS="-DSIEVE_M1_CONSTANT_PRIME_CAP=1523"`.
+Primes 13 through 353 (indices 5 through 70 in a typical prime list) are sieved with manually unrolled constant-stride loops. By default, M1 medium primes 359 through 1,021 come from compact constant-prime tables that the compiler fully unrolls; primes 1,031 through `SIEVE_M1_PRIME_CAP` use the general log-prime encoding while walking four adjacent streams together. Override `SIEVE_M1_CONSTANT_PRIME_CAP` at compile time to retune this handoff from 353 through 2,039, for example with `make EXTRA_CXXFLAGS="-DSIEVE_M1_CONSTANT_PRIME_CAP=1523"`.
 
 ### Bucket scheduler
 
 Large primes require additional treatment. For a sub-segment being processed, most primes larger than its length do not hit that sub-segment at all. With fixed-size sub-segments, iterating through all such primes for every sub-segment wastes time and can raise the sieving cost from essentially linear to about $O(u^{3/2})$. The bucket scheduler avoids rediscovering these sparse hits by carrying each large prime forward from one contributing sub-segment to the next.
 
-The scheduler uses a circular buffer of `LP_SIZE = 512` buckets indexed by `subSegIndex & 511`. Each large prime is stored in the bucket corresponding to the next sub-segment that contains a multiple of that prime. When the sub-segment is processed, the prime contributes to that one location, and is then pushed forward into the bucket for its next hit. The power-of-two choice keeps the bucket index arithmetic simple, since wraparound can be handled by masking rather than by an integer division.
+The scheduler uses a circular buffer of `LP_SIZE = 512` buckets indexed by `subSegIndex & 511`. Each large prime is stored in the bucket corresponding to the next sub-segment that contains a multiple of that prime. When the sub-segment is processed, the prime contributes to that one location, and is then pushed forward into the bucket for its next hit. Multiples of 4 are already known to be non-squarefree from the stencil, so the scheduler skips such a hit by advancing once more by $p$. This bounded second jump is used only when it still fits within the ring's reach; otherwise the ordinary one-$p$ forwarding is retained. The power-of-two bucket count keeps wraparound arithmetic to a mask rather than an integer division.
 
-The default direct-sieve cutoff $X$ is $2{,}772{,}000$ for both the fused-prefix and separately finalized paths. The optional finalized rolling block walk uses $X = 1{,}247{,}400$. When the bucket scheduler is disabled (`BUCKET_SIEVE=0`), all primes above `M1_PRIME_CAP` fall back to tiled direct iteration.
+The default direct-sieve cutoff $X$ is $2{,}772{,}000$ for both the fused-prefix and separately finalized paths. The optional finalized rolling block walk uses $X = 1{,}247{,}400$. When the bucket scheduler is disabled (`BUCKET_SIEVE=0`), all primes above `SIEVE_M1_PRIME_CAP` fall back to tiled direct iteration.
 
 ---
 

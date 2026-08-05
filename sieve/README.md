@@ -2,10 +2,15 @@
 
 A high-performance segmented sieve of the Mobius function $\mu(k)$ and the Mertens function $M(n) = \sum_{k=1}^{n} \mu(k)$, using SIMD intrinsics (ARM NEON, SSE2, AVX2, AVX-512, SVE2) and OpenMP parallelism.
 
-The Mobius sieve uses a three-phase approach:
-1. **Stencil pre-sieve** with period $13860 = \text{lcm}(4, 9, 5, 7, 11)$ eliminates multiples of primes $\le 11$
-2. **Medium primes** sieved directly
-3. **Large primes** handled via a bucket scheduler with a circular buffer (disable with `BUCKET_SIEVE=0` to fall back to direct medium-prime iteration)
+The Mobius sieve uses the following processing tiers:
+
+1. **Stencil primes** $p \le 11$ use a pre-sieved pattern of period $13860 = \text{lcm}(4, 9, 5, 7, 11)$.
+2. **Small primes** $13 \le p \le 353$ use hardcoded constant-stride loops.
+3. **M1 medium primes** $359 \le p \le 32000$ use constant-prime tables and a four-stream M1 walk.
+4. **Tiled medium primes** above 32000 are sieved directly in wider tiles.
+5. **Large primes** use a circular bucket scheduler; `BUCKET_SIEVE=0` falls back to tiled direct iteration.
+
+The exact handoff from tiled medium to large primes depends on the finalization path and its direct-sieve cutoff. See [Performance & technical details](PERFORMANCE.md) for the current defaults.
 
 The Mertens sieve wraps the Mobius sieve and adds a parallel prefix sum to convert $\mu$ values into cumulative $M(x)$ values with a compressed storage scheme: $M(x) = \text{coarse}[x / 256] + \text{residual}[x]$. The stride (256) is controlled by the `SIEVE_STRIDE_LOG` build flag (default 8, i.e. $2^8 = 256$). Smaller values increase coarse array size but reduce residual range; larger values do the opposite. See [Int8 residual overflow](#range-limits) for the tradeoffs.
 
