@@ -1,3 +1,9 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/mertens-banner-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset=".github/assets/mertens-banner-light.svg">
+  <img alt="Mertens" src=".github/assets/mertens-banner-light.svg">
+</picture>
+
 # Möbius μ and Mertens M Computations
 
 This repository was used to first compute
