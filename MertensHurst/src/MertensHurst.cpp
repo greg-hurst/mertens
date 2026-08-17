@@ -240,7 +240,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     mNuRatio = nuRatio;
 
     struct timeval start, end;
-    double t[8] = {0.0};
+    double t[9] = {0.0};
 
     constexpr UInt64 BF = SegmentedMobiusSieveCore::STENCIL_PERIOD;
     constexpr UInt64 min_B = BF * ((10000000ULL + BF - 1) / BF);
@@ -808,8 +808,39 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         L1 = L2 + 1;
     }
 
+    // ========================================================================
+    // Square-free Mobius finalization. For both the Q2 and Q6 invariants,
+    //
+    //   P_i = sum_{m: i*m<=nu, i*m square-free} W_{i*m}.
+    //
+    // Production obtains W_1=M(x) directly by Mobius inversion. The oracle
+    // build retains decreasing-i back substitution of every W_i.
+    // ========================================================================
+
+    Int64 result;
+    if constexpr (!UseFullRecovery) {
+        result = static_cast<Int64>(recoverSquarefreeFinalValue(
+            partialValues, partialValues128, cnt128, negativeRecoverySigns,
+            static_cast<UInt32>(mx)
+        ));
+    } else {
+        START_PROFILE();
+        if (cnt128 > 0) {
+            partialValues128.resize(partialValues.size());
+            for (UInt32 i = cnt128+1; i <= (UInt32)mx; ++i)
+                partialValues128[i] = (Int128)partialValues[i];
+
+            recoverSquarefreeInPlace(partialValues128, hash, static_cast<UInt32>(nu));
+            result = (Int64)partialValues128[1];
+        } else {
+            recoverSquarefreeInPlace(partialValues, hash, static_cast<UInt32>(nu));
+            result = partialValues[1];
+        }
+        END_PROFILE(t[8]);
+    }
+
     if (profile) {
-        double tot = t[0] + t[1] + t[2] + t[3] + t[4] + t[5] + t[6] + t[7];
+        double tot = t[0] + t[1] + t[2] + t[3] + t[4] + t[5] + t[6] + t[7] + t[8];
 
         std::cout << std::endl;
         std::cout << "-------------- Parameters -------------------" << std::endl;
@@ -837,37 +868,14 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         std::cout << "          Sieve: " << (t[0]+t[3]+t[6]) << ", " << (100.0*(t[0]+t[3]+t[6])/tot) << "%" << std::endl;
         std::cout << "             S1: " << (t[2]+t[5]+t[7]) << ", " << (100.0*(t[2]+t[5]+t[7])/tot) << "%" << std::endl;
         std::cout << "             S2: " << (t[1]+t[4]     ) << ", " << (100.0*(t[1]+t[4]     )/tot) << "%" << std::endl;
+        if constexpr (UseFullRecovery) {
+            std::cout << "Back substitution: " << t[8] << ", " << (100.0*t[8]/tot) << "%" << std::endl;
+        }
         std::cout << "---------------------------------------------" << std::endl;
         std::cout << std::endl;
     }
 
-    // ========================================================================
-    // Square-free Mobius finalization. For both the Q2 and Q6 invariants,
-    //
-    //   P_i = sum_{m: i*m<=nu, i*m square-free} W_{i*m}.
-    //
-    // Production obtains W_1=M(x) directly by Mobius inversion. The oracle
-    // build retains decreasing-i back substitution of every W_i.
-    // ========================================================================
-
-    if constexpr (!UseFullRecovery) {
-        return static_cast<Int64>(recoverSquarefreeFinalValue(
-            partialValues, partialValues128, cnt128, negativeRecoverySigns,
-            static_cast<UInt32>(mx)
-        ));
-    } else {
-        if (cnt128 > 0) {
-            partialValues128.resize(partialValues.size());
-            for (UInt32 i = cnt128+1; i <= (UInt32)mx; ++i)
-                partialValues128[i] = (Int128)partialValues[i];
-
-            recoverSquarefreeInPlace(partialValues128, hash, static_cast<UInt32>(nu));
-            return (Int64)partialValues128[1];
-        }
-
-        recoverSquarefreeInPlace(partialValues, hash, static_cast<UInt32>(nu));
-        return partialValues[1];
-    }
+    return result;
 }
 
 } // anonymous namespace
