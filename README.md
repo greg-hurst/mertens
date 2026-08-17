@@ -4,7 +4,7 @@
   <img alt="Mertens" src=".github/assets/mertens-banner-light.svg">
 </picture>
 
-# Möbius μ and Mertens M Computations
+# Möbius μ & Mertens M Computations
 
 This repository was used to first compute
 
