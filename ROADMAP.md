@@ -22,17 +22,11 @@ These are the main things I am actively thinking about.
 - Give x86-64 performance more attention, including AVX2 and AVX-512 systems.
 - Scrutinize MertensHT on inputs beyond $10^{23}$ more, and make sure all needed safe-guards are in place.
 - Tune architecture-dependent defaults, such as quotient strategy, segment sizes, bucket sizes, prefetch distances, and scheduling policies.
-- Improve true single-threaded performance, beyond simply running the OpenMP code with one thread.
 
 ### Reusable components
 
 - Spin out the quotient predictor as a standalone documented primitive.
 - Spin out the large-prime bucket scheduler as a reusable component or example.
-
-### Algorithmic experiments
-
-- Explore deeper inclusion-exclusion reductions.
-- Add an option, and possibly better defaults, for using deeper inclusion-exclusion when it is practically beneficial.
 
 ### GPU experiments
 
@@ -56,3 +50,11 @@ These are lower-priority improvements that would make the project easier to use,
 - Can quotient prediction become a useful general primitive for exact floor-quotient streams?
 - What bucket representation is best on modern x86, Apple Silicon, and GPU-like memory systems?
 - Can automatic parameter selection get close to hand-tuned performance?
+
+## Completed
+
+### Deeper inclusion-exclusion — 13 July 2026
+
+- Implemented exact outer-$Q=6$ transforms for $S_1$ and $S_2$ and made Q6/Q6 the production default.
+- Retained the original all-$Q=2$ implementation through `make q2` as a reference path.
+- Tested the deeper Q6/Q30 variant; its additional summand complexity outweighed the reduction in summand count, so it was not retained.

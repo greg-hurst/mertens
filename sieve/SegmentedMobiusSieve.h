@@ -4,9 +4,17 @@
 // SegmentedMobiusSieve.h — Segmented sieve of the Mobius function mu(n).
 //
 // Computes mu(k) for k in [lo, hi] using a three-phase approach:
-//   Phase 1: Copy pre-sieved stencil (primes 2,3,5,7,11) + apply small primes
-//   Phase 2: Apply medium primes via direct sieving
+//   Phase 1: Initialize M1 chunks with stencil, small primes, and M1 medium primes
+//   Phase 2: Apply the remaining medium primes via tiled direct sieving
 //   Phase 3: Apply large primes via a bucket scheduler
+//
+// Prime-range terminology:
+//   stencil primes:  p <= 11
+//   small primes:    13 <= p <= 353
+//   M1 medium primes: 359 <= p <= M1_PRIME_CAP
+//   M1-stage primes: collectively, p <= M1_PRIME_CAP
+//   tiled medium primes: M1_PRIME_CAP < p <= the direct-sieve cutoff
+//   large primes: p > the direct-sieve cutoff
 //
 // The sieve buffer stores packed Int8 values during sieving. A finalization
 // step (finalizeMuVec when SIMD is available) converts these to actual mu ∈ {-1, 0, +1}.
@@ -14,7 +22,7 @@
 // Arbitrary intervals [lo, hi] are supported — no alignment constraints.
 //
 // The prime list passed to sieve() must contain at least 71 entries (primes
-// up to >= 353) due to the hardcoded sieveHelper1 unrolling. Use
+// up to >= 353) due to the hardcoded sieveM1PrimeRange unrolling. Use
 // primesUpTo(std::max(360u, sqrt_hi)) to guarantee this.
 // ============================================================================
 
@@ -22,6 +30,7 @@
 #include "simd_defs.h"
 #include "QuotientCache.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <utility>
@@ -78,22 +87,28 @@ public:
     // For use with sieve(), pass at least primesUpTo(max(MIN_PRIMES_BOUND, sqrt(hi))).
     static std::vector<UInt32> primesUpTo(UInt32 n);
 
-    // Largest prime the bucket scheduler can reach (LP_SIZE * M2). When the
-    // bucket scheduler is enabled, the sieve endpoint must satisfy
-    // sqrt(u) < schedulerReach() — see MertensHurst/INPUT_BOUNDS.md.
+    // Largest prime the bucket scheduler can reach ((LP_SIZE - 1) * M2).
+    // When the bucket scheduler is enabled, the sieve endpoint must satisfy
+    // sqrt(u) <= schedulerReach() — see MertensHurst/INPUT_BOUNDS.md.
     static constexpr UInt64 schedulerReach() {
-        return LargePrimeHitScheduler::LP_SIZE * M2;
+        return (LargePrimeHitScheduler::LP_SIZE - 1) * M2;
     }
 
 private:
+    // Odd-valued ceil-log2 weight stored for each odd prime factor in the
+    // packed sieve. Requires odd prime p. Keep synchronized with the stencil.
+    static inline Int8 primeLogWeight(UInt32 p) noexcept {
+        return static_cast<Int8>((32 - __builtin_clz(p)) | 1U);
+    }
+
     // Precompute Granlund-Montgomery magic multipliers for the given prime list.
     // Auto-called by sieve() on first use when USE_DIVISION_FREE=1.
     void initSieveQuotientCache(const std::vector<UInt32>& primes);
 
     // --- Sieve phases ---
 
-    // Phase 1: stencil + small primes (p <= STENCIL_PERIOD)
-    void sieveSmallPrimes(Int8* mu, const UInt32* primes, UInt64 lo, UInt64 hi);
+    // M1 stage: stencil + hardcoded small primes + M1 medium primes
+    void sieveM1Primes(Int8* mu, const UInt32* primes, UInt64 lo, UInt64 hi);
 
     // Finalization: convert packed sieve values to mu ∈ {-1, 0, +1}
     void finalizeMu(Int8* mu, UInt64 lo, UInt64 hi);
@@ -103,9 +118,10 @@ private:
     static void finalizeMuVec(Int8* mu, int fl, size_t n);
 #endif
 
-    // Manually unrolled sieve for primes 13..353 and their squares
-    static void sieveHelper1(Int8* mu, const UInt32* primes, UInt64 lo, UInt64 hi,
-                             UInt32 stoppos, const SieveQuotientCache* cache);
+    // Apply hardcoded small primes 13..353, then M1 medium primes using
+    // constant-stride and four-stream kernels.
+    static void sieveM1PrimeRange(Int8* mu, const UInt32* primes, UInt64 lo, UInt64 hi,
+                                  UInt32 stoppos, const SieveQuotientCache* cache);
 
     // Zero p^2 multiples for primes[fromIdx..toIdx) over the whole segment.
     // For p >= 359 (index 71+), p^2 exceeds every sub-segment length, so squares are
@@ -119,13 +135,20 @@ private:
                                       UInt64 fromIdx, UInt64 toIdx,
                                       const SieveQuotientCache* cache);
 
+    // Apply medium primes while carrying each prime's next-hit offset across
+    // a contiguous run of M2 sub-segments.
+    static void sieveMediumSubSegmentRolling(Int8* mu, const UInt32* primes, UInt64 len,
+                                             UInt64 fromIdx, UInt64 toIdx,
+                                             std::vector<UInt32>& nextOff);
+
     // --- Bucket sieve for large primes ---
     struct LargePrimeHitScheduler {
         // Bucket entry layout (-DSIEVE_NARROW_ENTRY=0|1):
         //   narrow (default): the entry IS the prime (UInt32). The offset is
         //     recomputed per sub-segment by one divide, the log weight by CLZ.
-        //     Half the entry-stream footprint; sub-buckets forced off. Wins
-        //     in the bandwidth-bound many-core regime (~20% at 10^16).
+        //     Half the persistent entry-stream footprint. Current hits are
+        //     transiently grouped into cache-sized offset bands before their
+        //     mu updates. Wins in the bandwidth-bound many-core regime.
         //   wide: self-contained 64-bit entry — bits 0..20 off, 21..41 p mod
         //     M2, 42..51 p / M2, 52..57 log weight. Forwarding is a branchless
         //     Bresenham step: cheapest per hit, but the 8-byte entry stream
@@ -183,40 +206,40 @@ private:
         UInt64 subSegIndexOf(const UInt64& x) const noexcept;
         bool emptySubSegment(const UInt64& subSeg) const noexcept;
         void bucketPush(const UInt64& subSeg, EntryT e) noexcept;
-        static Int8 logprime(UInt32 p) noexcept;
+        static UInt64 skipStencilSquare4(UInt64 m, UInt64 p) noexcept;
         // Pack (p, first-hit offset) into the entry layout above. Seed-time
         // only — the per-hit path forwards entries without repacking from p.
         static EntryT packEntry(UInt32 p, UInt64 off) noexcept;
         void sieveSubSegment(Int8* __restrict muBase) noexcept;
+        template<bool AllSkipsFit>
+        void sieveSubSegmentImpl(Int8* __restrict muBase) noexcept;
 
         // Number of buckets in the circular buffer. Must be a power of 2
-        // because bucket indexing uses (subSeg & (LP_SIZE - 1)) as a fast modulo.
+        // because bucket indexing uses (subSeg & (LP_SIZE - 1)) as a fast
+        // modulo, and at least 2 because schedulerReach() subtracts one bucket.
         //
-        // LP_SIZE bounds the largest schedulable prime: sqrt(u) < LP_SIZE * M2,
-        // so 512 covers u up to ~2.06e17. The wide entry's 10-bit stride field
-        // supports LP_SIZE up to exactly 1024, and doubling it is
-        // performance-neutral. 512 is the record-run configuration; see
+        // LP_SIZE bounds the largest schedulable prime to
+        // (LP_SIZE - 1) * M2, so 512 covers u up to ~2.05e17. The wide entry's
+        // 10-bit stride field supports LP_SIZE up to exactly 1024, and doubling
+        // it is performance-neutral. 512 is the record-run configuration; see
         // PERFORMANCE.md section 6 and Section 7 of the paper.
 #ifndef SIEVE_LP_SIZE
 #define SIEVE_LP_SIZE 512
 #endif
         static constexpr UInt64 LP_SIZE = SIEVE_LP_SIZE;
-        static_assert((LP_SIZE & (LP_SIZE - 1)) == 0,
-                      "LP_SIZE must be a power of two (bucket index uses masking)");
+        static_assert(LP_SIZE >= 2 && (LP_SIZE & (LP_SIZE - 1)) == 0,
+                      "LP_SIZE must be a power of two of at least 2");
         static_assert(LP_SIZE <= LP_S_MASK + 1,
                       "stride field must hold p / M2 for the largest schedulable prime");
 
-        // Sub-buckets (default ON; disable with -DSIEVE_SUB_BUCKETS=0):
-        // split each sub-segment's bucket into LP_SUBS sub-buckets banded by
-        // offset high bits, so hits land in 2^LP_SUB_SHIFT-byte windows and
-        // the mu RMW lines stay L1-resident across a band (~5-10% end-to-end
-        // in bucket-heavy regimes, bit-exact either way). 17 matches Apple's
-        // 128 KB L1D; on smaller-L1 x86 cores try 14..16.
+        // Offset bands (default ON; disable with -DSIEVE_SUB_BUCKETS=0) keep
+        // the mu RMW lines cache-local. Wide entries store their offset, so
+        // the persistent ring itself is split into LP_SUBS bands. Narrow
+        // entries remain prime-only in the ring and transiently group only
+        // the current sub-segment's decoded hits below.
 #ifndef SIEVE_SUB_BUCKETS
 #define SIEVE_SUB_BUCKETS 1
 #endif
-        // Sub-buckets band by the hit offset, which the narrow entry does not
-        // store — so they are available only in the wide build.
 #if SIEVE_SUB_BUCKETS && !SIEVE_NARROW_ENTRY
 #ifndef SIEVE_SUB_SHIFT
 #define SIEVE_SUB_SHIFT 17
@@ -231,6 +254,26 @@ private:
 #endif
         static constexpr UInt64 LP_NBUCKETS = LP_SIZE * LP_SUBS;
 
+        // Narrow entries cannot be persistently offset-banded without growing
+        // beyond four bytes. Materialize the current hit as (offset, log
+        // weight) instead, then apply those hits in cache-sized bands. The
+        // transient vectors retain their capacity between sub-segments.
+#if SIEVE_SUB_BUCKETS && SIEVE_NARROW_ENTRY
+#ifndef SIEVE_NARROW_SUB_SHIFT
+#define SIEVE_NARROW_SUB_SHIFT 16
+#endif
+        static_assert(SIEVE_NARROW_SUB_SHIFT > 0
+                   && SIEVE_NARROW_SUB_SHIFT <= LP_OFF_BITS,
+                      "narrow sub-bucket shift must fit the offset field");
+        static constexpr int LP_TRANSIENT_SHIFT = SIEVE_NARROW_SUB_SHIFT;
+        static constexpr UInt64 LP_TRANSIENT_SUBS =
+            UInt64(1) << (LP_OFF_BITS - LP_TRANSIENT_SHIFT);
+        using TransientHitVecT = std::vector<UInt32>;
+#define SIEVE_NARROW_SUBS_ACTIVE 1
+#else
+#define SIEVE_NARROW_SUBS_ACTIVE 0
+#endif
+
         // Ring slot for an entry headed to `subSeg` (sub-bucket from its offset).
         static UInt64 ringIndex(const UInt64& subSeg, EntryT e) noexcept;
 
@@ -239,7 +282,11 @@ private:
         UInt64 mCurrentSubSegIndex;
         const UInt32* mP;
         const UInt32 mPInd0, mPInd1;
+        const bool mAllSkipsFit;
         std::vector<PVecT>& mBuckets;
+#if SIEVE_NARROW_SUBS_ACTIVE
+        std::array<TransientHitVecT, LP_TRANSIENT_SUBS> mTransientHits;
+#endif
         const SieveQuotientCache* mCache;
     };
 
@@ -247,14 +294,14 @@ private:
     // Must be multiples of STENCIL_PERIOD for memcpy alignment.
     // M1 ~ L1 cache, M2 ~ L2 cache, M3 = bucket sieve cutoff.
     // M2/M3 multipliers are build-time tunable (keep M3 ~ 1.4x M2):
-    //   -DSIEVE_M2_MULT=8 -DSIEVE_M3_MULT=12 gives an L1-resident sub-segment.
-    // NOTE: shrinking M2 shrinks the scheduler capacity LP_SIZE * M2 and
+    //   -DSIEVE_M2_MULT=8 -DSIEVE_M3_MULT=12 gives an L1-sized sub-segment.
+    // NOTE: shrinking M2 shrinks the scheduler capacity (LP_SIZE - 1) * M2 and
     // grows the per-entry stride field s = p / M2 — check both limits
     // (LP_S_MASK and the LP_SIZE comment) before production use.
 #ifndef SIEVE_M1_MULT
-#define SIEVE_M1_MULT 4
+#define SIEVE_M1_MULT 8
 #endif
-    static constexpr UInt64 M1 = SIEVE_M1_MULT * STENCIL_PERIOD;   // ~55K — Phase 1 unit
+    static constexpr UInt64 M1 = SIEVE_M1_MULT * STENCIL_PERIOD;   // ~111K — Phase 1 unit
 #ifndef SIEVE_M2_MULT
 #define SIEVE_M2_MULT 64
 #endif
@@ -264,9 +311,32 @@ private:
     static constexpr UInt64 M2 = SIEVE_M2_MULT * STENCIL_PERIOD;   // ~887K default
     static_assert(M2 <= (UInt64(1) << LargePrimeHitScheduler::LP_OFF_BITS),
                   "sub-segment offset must fit in LP_OFF_BITS; raise LP_OFF_BITS if M2 grows");
-    static constexpr UInt64 M3 = SIEVE_M3_MULT * STENCIL_PERIOD;   // bucket threshold
+    static constexpr UInt64 M3 = SIEVE_M3_MULT * STENCIL_PERIOD;   // optional block-walk direct cutoff
+    static constexpr UInt64 BLOCK_SEGMENTS = 128;                  // contiguous M2 work unit
+    static constexpr UInt64 BLOCK_WALK_MIN_SEGMENTS = 4096;        // ~3.6 billion values
     static_assert(M3 > M2, "large primes must exceed the sub-segment length (<= 1 hit per sub-segment)");
-    static constexpr UInt64 SMALL_PRIME_CAP = STENCIL_PERIOD;
+    // M1 medium primes through this boundary use the four-stream M1 walk;
+    // larger primes use the wider medium tiles. This need not match the
+    // stencil period and can be retuned independently for another machine.
+#ifndef SIEVE_M1_PRIME_CAP
+#define SIEVE_M1_PRIME_CAP 32000
+#endif
+    static constexpr UInt64 M1_PRIME_CAP = SIEVE_M1_PRIME_CAP;
+    static_assert(M1_PRIME_CAP >= 353,
+                  "M1-prime cap must include the fully unrolled small primes through 353");
+
+    // M1 medium primes through this boundary use compile-time constant-stride
+    // loops; the remaining M1 medium primes use the four-stream walk. The
+    // default is tuned for Apple M3 Ultra. Values through 2,039 are available
+    // for compile-time retuning on other machines.
+#ifndef SIEVE_M1_CONSTANT_PRIME_CAP
+#define SIEVE_M1_CONSTANT_PRIME_CAP 1021
+#endif
+    static constexpr UInt64 M1_CONSTANT_PRIME_CAP = SIEVE_M1_CONSTANT_PRIME_CAP;
+    static_assert(M1_CONSTANT_PRIME_CAP >= 353 && M1_CONSTANT_PRIME_CAP <= 2039,
+                  "constant-prime cap must be between 353 and 2,039");
+    static_assert(M1_CONSTANT_PRIME_CAP <= M1_PRIME_CAP,
+                  "constant-prime cap cannot exceed the M1-prime cap");
 
     // --- Data members ---
     std::vector<Int8> mMu;           // Main sieve buffer
@@ -277,7 +347,7 @@ private:
     std::vector<std::vector<LargePrimeHitScheduler::PVecT>> mBuckets;
 
     // Index tracking for incremental prime range updates
-    UInt32 mSmallPrimeStopIdx;
+    UInt32 mM1PrimeStopIdx;
     UInt32 mSqrtPrimeStopIdx;
 
     // Granlund-Montgomery quotient cache for prime offsets

@@ -21,10 +21,13 @@ Linux builds with the same `make`. On Windows use WSL (see the top-level README)
 
 ```
 make        # build the binary
+make q2     # build the original all-Q2 reference binary
 make clean  # remove build artifacts
 ```
 
-The binary is placed in `build/`.
+The normal binary, `build/mertens`, uses exact outer-$Q=6$ transforms for both
+$S_1$ and $S_2$. The reference target produces `build/mertens_q2`; it is slower
+but computes the same result through the original all-$Q=2$ path.
 
 ### Division-free mode
 
@@ -55,8 +58,8 @@ Options:
 
 - `--profile` (or `-p`): print a timing breakdown by computation phase, along with the parameter values used.
 - `--segment-cap <len>`: cap on the sieve segment length in the large-segment phase, in integers (default: 12000000000, about 12 GB — the sieve costs roughly one byte per integer). Larger segments mean fewer sieve passes but more memory; the value is rounded up to a multiple of the stencil period (13860). Raise it for very large inputs (the $10^{25}$ record run used $4 \times 10^{11}$, about 400 GB) if you have the RAM.
-- `--u <value>`: set the sieve truncation point $u$ directly, bypassing the default formula. Must satisfy $0 < u < n$. Hard caps are enforced at runtime per build: $u \le 2.06 \times 10^{17}$ with the bucket scheduler (the default), and $u \lesssim 1.8 \times 10^{19}$ always (UInt32 primes / byte encoding). On `DIVISION_FREE=1` builds also keep $u < 2^{60} - 2^{32}$ (see `INPUT_BOUNDS.md` constraints 3-5). Larger $u$ shifts work from S1/S2 summation into sieving; smaller $u$ does the opposite.
-- `--u-factor <value>`: override the scaling factor in the $u$ formula: $u = \lceil \text{factor} \cdot (n / \ln \ln n)^{2/3} \rceil$. Must be positive. The default factor is computed as $\text{clamp}(1.85 - 0.05 \log_{10} n,\ 0.75,\ 1.05)$. Mutually exclusive with `--u`.
+- `--u <value>`: set the sieve truncation point $u$ directly, bypassing the default formula. Must satisfy $0 < u < n$. Hard caps are enforced at runtime per build: $u \le 2.05 \times 10^{17}$ with the bucket scheduler (the default), and $u \lesssim 1.8 \times 10^{19}$ always (UInt32 primes / byte encoding). On `DIVISION_FREE=1` builds also keep $u < 2^{60} - 2^{32}$ (see `INPUT_BOUNDS.md` constraints 3-5). Larger $u$ shifts work from S1/S2 summation into sieving; smaller $u$ does the opposite.
+- `--u-factor <value>`: override the scaling factor in the $u$ formula: $u = \lceil \text{factor} \cdot (n / \ln \ln n)^{2/3} \rceil$. Must be positive. The default factor is computed as $\text{clamp}(1.95 - 0.05 \log_{10} n,\ 0.75,\ 1.10)$. Mutually exclusive with `--u`.
 - `--nu-ratio <value>`: S1/S2 split ratio (default: $1.5$). Controls the boundary between the S1 (Mertens sum) and S2 (Möbius sum) ranges via $\nu(x) = \lfloor \text{ratio} \cdot \sqrt{x} \rfloor$. Must be positive. Affects only performance, not correctness.
 
 Examples:
@@ -66,7 +69,7 @@ $ ./build/mertens 10000000000
 M(10000000000) = -33722 in 0.011 seconds
 
 $ ./build/mertens 10000000000000000 --profile
-M(10000000000000000) = -3195437 in 7.1 seconds
+M(10000000000000000) = -3195437 in 2.0 seconds
 
 --------------- Loop 1 16-bit ---------------
 ...
@@ -94,9 +97,13 @@ INPUT_BOUNDS.md             Analysis of bounds on n
 COMPILE_FLAGS.md            What each build flag does
 src/
   MertensHurst.h            Public API: Int64 MertensHurst(UInt128 n)
-  MertensHurst.cpp          Algorithm orchestration (loops, back substitution)
-  S2.h                      S2 summation functions (64-bit and 128-bit)
+  MertensHurst.cpp          Algorithm orchestration (loops, final recovery)
   S1.h                      S1 summation functions (64-bit and 128-bit)
+  S1Q6.h                    Exact outer-Q6 S1 transform kernels
+  S2.h                      S2 summation functions (64-bit and 128-bit)
+  S2Q6.h                    Exact outer-Q6 S2 dispatch
+  S2Q6Modes.h               Static outer-Q6 S2 coefficient modes
+  OuterRecovery.h           Final-value inversion and optional full recovery
   QuotientPredictor.h       Division-free quotient estimation
   main.cpp                  Driver program
 ../sieve/                   Shared segmented Mobius sieve (see sieve/README.md)

@@ -117,7 +117,7 @@ See [sieve/README.md](sieve/README.md) for the full API and [sieve/PERFORMANCE.m
 
 ## GPU experiments
 
-[GPU_experimental](GPU_experimental/) contains GPU ports of both implementations, behind the GPU results in the paper's Appendix D. This code is experimental: it has not been scrutinized to the level of the CPU implementations, and it is Metal only (AMD GPUs — no CUDA). It exists for exploration, and maybe a real implementation down the road.
+[GPU_experimental](GPU_experimental/) contains GPU ports of both implementations, behind the GPU results in the paper's Appendix D. This code is experimental: it has not been scrutinized to the level of the CPU implementations, and it is Metal only (Apple Silicon and supported AMD GPUs — no CUDA). It exists for exploration, and maybe a real implementation down the road.
 
 The GPU implementations are not required for the main record computations.
 

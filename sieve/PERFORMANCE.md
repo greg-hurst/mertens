@@ -16,15 +16,15 @@ by Mertens' second theorem. The Mertens prefix sum adds a linear pass, so the ov
 
 When used inside the $O(n^{2/3})$ MertensHurst algorithm, the sieve range is $[1, u]$ where
 
-$$u = \left\lceil \texttt{fac} \cdot \left(\frac{n}{\ln \ln n}\right)^{\!2/3} \right\rceil, \qquad \texttt{fac} = \text{clamp}\!\left(1.85 - 0.05 \log_{10} n,\ 0.75,\ 1.05\right).$$
+$$u = \left\lceil \texttt{fac} \cdot \left(\frac{n}{\ln \ln n}\right)^{\!2/3} \right\rceil, \qquad \texttt{fac} = \text{clamp}\!\left(1.95 - 0.05 \log_{10} n,\ 0.75,\ 1.10\right).$$
 
-The factor $\texttt{fac}$ is $1.05$ for $n \le 10^{16}$ and decreases linearly in $\log_{10} n$ to $0.75$ at $n = 10^{22}$ and above, balancing sieve cost $O(u \log \log u)$ against the $S_1$/$S_2$ summation cost $O(n / \sqrt{u})$. The $\ln \ln n$ term in the denominator reflects that sieving becomes relatively cheaper at larger $n$ because each prime eliminates a $1/p$ fraction of positions, and the sum $\sum 1/p$ grows only as $\log \log n$.
+The factor $\texttt{fac}$ is $1.10$ for $n \le 10^{17}$ and decreases linearly in $\log_{10} n$ to $0.75$ at $n = 10^{24}$ and above, balancing sieve cost $O(u \log \log u)$ against the $S_1$/$S_2$ summation cost $O(n / \sqrt{u})$. The $\ln \ln n$ term in the denominator reflects that sieving becomes relatively cheaper at larger $n$ because each prime eliminates a $1/p$ fraction of positions, and the sum $\sum 1/p$ grows only as $\log \log n$.
 
 The sieve's contribution to total MertensHurst runtime is therefore $O\!\left((n / \ln \ln n)^{2/3} \cdot \log \log n\right) = O\!\left(n^{2/3} (\log \log n)^{1/3}\right)$.
 
 ### Empirical throughput
 
-The following timings were measured on an Apple M3 Ultra with `BUCKET_SIEVE=1` and OpenMP enabled.
+The following historical timings are from Table 5 of the paper and describe the `v1.0` implementation on an Apple M3 Ultra with `BUCKET_SIEVE=1` and OpenMP enabled. They are retained for comparison and are not current-branch benchmarks.
 
 Cumulative standalone times through the listed endpoint (Table 5 of the paper; segment sizes as listed there):
 
@@ -34,6 +34,15 @@ Cumulative standalone times through the listed endpoint (Table 5 of the paper; s
 | $10^{11}$ | 2.66 s | 3.17 s |
 | $10^{13}$ | 433.7 s | 469.3 s |
 | $10^{16}$ | 7.00 d | 7.39 d |
+
+Current-branch cumulative timings at the larger endpoints, using
+400-billion-value segments, are:
+
+| $N$ | `v1.0` $\mu$ sieve | Current $\mu$ sieve | Speedup | `v1.0` $\mu + M$ sieve | Current $\mu + M$ sieve | Speedup |
+|-----:|--------------------:|---------------------:|--------:|------------------------:|-------------------------:|--------:|
+| $10^{14}$ | 1.38 h | 1.0834 h | **1.274x** | 1.48 h | 1.1621 h | **1.274x** |
+| $10^{15}$ | 15.34 h | 12.2748 h | **1.250x** | 16.27 h | 13.0278 h | **1.249x** |
+| $10^{16}$ | 7.00 d | 5.7382 d | **1.220x** | 7.39 d | 6.0173 d | **1.228x** |
 
 The Mertens sieve costs slightly more than the Mobius sieve alone, since it adds the segmented prefix sum into the compressed representation.
 
@@ -53,7 +62,7 @@ The `SegmentedMobiusSieveCore` maintains three buffers:
 | `mPreMu` | `Int8[]` | $M_1 + P$ bytes | Tiled stencil copy for Phase 1 (read-only after init) |
 | `mStencilData` | `Int8[]` | $P = 13{,}860$ bytes | Base stencil pattern (copied from `stencil_data.h`) |
 
-where $B$ is the user-specified segment size and $M_1 = 4P = 55{,}440$.
+where $B$ is the user-specified segment size and $M_1 = 8P = 110{,}880$.
 
 When the bucket scheduler is enabled, each OpenMP thread maintains its own array of `LP_SIZE = 512` bucket vectors. In the default narrow format (`SIEVE_NARROW_ENTRY=1`) each entry is a 4-byte prime and the hit offset is recomputed per hit; the wide format packs (offset, $p \bmod M_2$, $p / M_2$, log weight) into 8 bytes and is divide-free per hit (see §6). The total bucket memory depends on how many large primes land in each sub-segment, but is typically small relative to the sieve buffer.
 
@@ -84,7 +93,7 @@ For a $10^9$-element segment, the compressed mode uses approximately 1.03 GB (31
 
 ## 3. Stencil pre-sieve
 
-The first primes are handled by a stencil of period $P = 13{,}860 = \text{lcm}(4, 9, 5, 7, 11)$. A stencil of this period, pre-sieved by 2, 3, $2^2$, 5, 7, $3^2$, and 11, is computed once and then copied into each new segment. In the implementation used here, this copy is done in large tiles ($\sim 4$ MiB) so that the memory copy reaches high bandwidth. After the stencil has been copied, primes up to 353 are applied by unrolled code. Here small primes are those treated by these unrolled loops, medium primes are the remaining primes that are sieved directly, and large primes are those handled by the bucket scheduler below.
+The first primes are handled by a stencil of period $P = 13{,}860 = \text{lcm}(4, 9, 5, 7, 11)$. A stencil of this period, pre-sieved by 2, 3, $2^2$, 5, 7, $3^2$, and 11, is computed once and then copied into each new segment. After the stencil has been copied, the small primes through 353 are applied by hardcoded unrolled loops. Medium primes begin at 359: M1 medium primes through `SIEVE_M1_CONSTANT_PRIME_CAP` use fully unrolled constant-stride tables, the remainder through `SIEVE_M1_PRIME_CAP` use a four-stream walk on M1 chunks, and tiled medium primes use wider direct-sieve tiles. Large primes are handled by the bucket scheduler below.
 
 The five smallest primes account for the densest sieving work. Their combined period is small enough to fit in L1 cache (13,860 bytes) while eliminating the most expensive per-segment iterations. Adding 13 would increase the period to $180{,}180$, which is still feasible but offers diminishing returns since prime 13 only touches $1/13 \approx 7.7\%$ of positions.
 
@@ -92,25 +101,27 @@ The five smallest primes account for the densest sieving work. Their combined pe
 
 ## 4. Sieve phases and sub-segment hierarchy
 
-The sieve partitions primes into three categories based on size, each handled by a different phase with its own working-unit size:
+The paper's small, medium, and large categories are implemented with the following processing tiers:
 
-| Phase | Primes | Unit size | Method |
-|-------|--------|-----------|--------|
-| 1 (small) | $p \le P = 13{,}860$ | $M_1 = 4P = 55{,}440$ | Stencil copy + hardcoded unrolled sieve for $p \le 353$ |
-| 2 (medium) | $P < p \le M_3$ | $M_2 = 64P = 887{,}040$ | Direct iteration: for each prime, walk through the sub-segment hitting multiples |
-| 3 (large) | $p > M_3 = 90P$ | $M_2 = 887{,}040$ | Bucket scheduler: primes are scheduled into future sub-segments via circular buffer |
+| Tier | Primes | Unit size | Method |
+|------|--------|-----------|--------|
+| Stencil | $p \le 11$ | $P = 13{,}860$ | Copy the pre-sieved stencil |
+| Small | $13 \le p \le 353$ | $M_1 = 8P = 110{,}880$ | Hardcoded constant-stride loops |
+| M1 medium | $359 \le p \le 32{,}000$ | $M_1$ | Constant-stride tables through 1,021, then four adjacent streams |
+| Tiled medium | $32{,}000 < p \le X$ | $M_2$ or a larger direct tile | Four-stream direct iteration |
+| Large | $p > X$ | $M_2 = 64P = 887{,}040$ | Circular bucket scheduler |
 
-The Phase 1 unit $M_1$ keeps its working set in L1 cache. $M_2$ balances per-sub-segment overhead against cache pressure for medium primes. $M_3 = 90P = 1{,}247{,}400$ is the crossover point where a prime's stride exceeds the sub-segment length, making direct iteration wasteful since each prime hits at most one position per sub-segment.
+The M1-stage unit $M_1$ keeps its working set in L1 cache. $M_2$ balances per-sub-segment overhead against cache pressure for medium primes. The default tiled path uses a direct-sieve cutoff of $200P = 2{,}772{,}000$. The optional finalized rolling block walk (`SIEVE_FINALIZE_BLOCK_WALK=1`) retains its independently tunable $M_3 = 90P = 1{,}247{,}400$ cutoff.
 
-Primes 13 through 353 (indices 5 through 70 in a typical prime list) are sieved with manually unrolled loops using four stride patterns. The unrolling processes 4 iterations at a time for instruction-level parallelism. Primes 359 through $P$ use a general loop with log-prime encoding.
+Primes 13 through 353 (indices 5 through 70 in a typical prime list) are sieved with manually unrolled constant-stride loops. By default, M1 medium primes 359 through 1,021 come from compact constant-prime tables that the compiler fully unrolls; primes 1,031 through `SIEVE_M1_PRIME_CAP` use the general log-prime encoding while walking four adjacent streams together. Override `SIEVE_M1_CONSTANT_PRIME_CAP` at compile time to retune this handoff from 353 through 2,039, for example with `make EXTRA_CXXFLAGS="-DSIEVE_M1_CONSTANT_PRIME_CAP=1523"`.
 
 ### Bucket scheduler
 
 Large primes require additional treatment. For a sub-segment being processed, most primes larger than its length do not hit that sub-segment at all. With fixed-size sub-segments, iterating through all such primes for every sub-segment wastes time and can raise the sieving cost from essentially linear to about $O(u^{3/2})$. The bucket scheduler avoids rediscovering these sparse hits by carrying each large prime forward from one contributing sub-segment to the next.
 
-The scheduler uses a circular buffer of `LP_SIZE = 512` buckets indexed by `subSegIndex & 511`. Each large prime is stored in the bucket corresponding to the next sub-segment that contains a multiple of that prime. When the sub-segment is processed, the prime contributes to that one location, and is then pushed forward into the bucket for its next hit. The power-of-two choice keeps the bucket index arithmetic simple, since wraparound can be handled by masking rather than by an integer division.
+The scheduler uses a circular buffer of `LP_SIZE = 512` buckets indexed by `subSegIndex & 511`. Each large prime is stored in the bucket corresponding to the next sub-segment that contains a multiple of that prime. When the sub-segment is processed, the prime contributes to that one location, and is then pushed forward into the bucket for its next hit. Multiples of 4 are already known to be non-squarefree from the stencil, so the scheduler skips such a hit by advancing once more by $p$. This bounded second jump is used only when it still fits within the ring's reach; otherwise the ordinary one-$p$ forwarding is retained. The power-of-two bucket count keeps wraparound arithmetic to a mask rather than an integer division.
 
-When disabled (`BUCKET_SIEVE=0`), all primes above `SMALL_PRIME_CAP` fall back to Phase 2's direct iteration.
+The default direct-sieve cutoff $X$ is $2{,}772{,}000$ for both the fused-prefix and separately finalized paths. The optional finalized rolling block walk uses $X = 1{,}247{,}400$. When the bucket scheduler is disabled (`BUCKET_SIEVE=0`), all primes above `SIEVE_M1_PRIME_CAP` fall back to tiled direct iteration.
 
 ---
 
@@ -131,11 +142,11 @@ So there is **no collision bound** in the sense of the earlier floor/`numbits` s
 
 ### Capacity
 
-The bucket scheduler uses `LP_SIZE = 512` buckets with sub-segment length $M_2 = 887{,}040$. The scheduler must satisfy $\sqrt{u} < \texttt{LP\_SIZE} \times M_2$, since $\sqrt{u}$ is the largest prime that can appear in the segmented sieve. In the record implementation these constants were `LP_SIZE` $= 512$ and $M_2 = 887{,}040$; changing the sub-segment size or scheduler capacity changes the supported range accordingly.
+The bucket scheduler uses `LP_SIZE = 512` buckets with sub-segment length $M_2 = 887{,}040$. The largest schedulable prime is $(\texttt{LP\_SIZE} - 1) \times M_2$, since $\sqrt{u}$ is the largest prime that can appear in the segmented sieve. In the record implementation these constants were `LP_SIZE` $= 512$ and $M_2 = 887{,}040$; changing the sub-segment size or scheduler capacity changes the supported range accordingly.
 
-$$\sqrt{N} < 512 \times 887{,}040 = 454{,}164{,}480 \implies N < 2.06 \times 10^{17}$$
+$$\sqrt{N} \le 511 \times 887{,}040 = 453{,}277{,}440 \implies N \le 205{,}460{,}437{,}612{,}953{,}600 \approx 2.05 \times 10^{17}$$
 
-For larger ranges, build with `-DSIEVE_LP_SIZE=1024`, which raises the limit to $\sim 8.25 \times 10^{17}$ (still below the encoding overflow cap of §5). Alternatively, building with `BUCKET_SIEVE=0` disables the scheduler entirely; all primes use direct iteration, which removes this constraint but is slower.
+For larger ranges, build with `-DSIEVE_LP_SIZE=1024`, which raises the limit to $(1023 \times 887{,}040)^2 \approx 8.23 \times 10^{17}$ (still below the encoding overflow cap of §5). Alternatively, building with `BUCKET_SIEVE=0` disables the scheduler entirely; all primes use direct iteration, which removes this constraint but is slower.
 
 When the sieve is used inside MertensHurst with the default $u(n)$ formula (`fac` $= 0.75$ at scale), this supports inputs to roughly $n = 5.9 \times 10^{26}$ (the figure quoted in the paper), comfortably above the tested $10^{25}$.
 
@@ -159,16 +170,21 @@ branchless Bresenham step with no per-hit divide — but the doubled entry
 stream is what saturates memory bandwidth at scale. Measured head-to-head on
 the 32-thread M3 Ultra: narrow wins by up to ~22% at $10^{16}$ with the gap
 growing, the crossover is near $3 \times 10^{14}$, and narrow is at most ~2%
-slower on the cheap decades below that. Sub-buckets band on the stored
-offset, so they exist only in wide builds. The trade-off is machine-specific:
-on x86 the per-hit divide is costlier, so a wide build with `SUB_BUCKETS=0`
-may win — re-measure before trusting the ARM-tuned default.
+slower on the cheap decades below that. Wide entries are persistently grouped
+by their stored offset. Narrow entries retain the 4-byte ring format and group
+only the current decoded hits into transient 64 KB bands before applying their
+$\mu$ updates. This improves cache locality without doubling persistent entry
+traffic. On the M3 Ultra this reduces production-sized bucket-heavy segments
+by roughly 4%; very small segments can instead lose slightly because the
+temporary-vector overhead is not sufficiently amortized. The trade-off remains
+machine-specific: on x86 the per-hit divide is costlier, so re-measure before
+trusting the ARM-tuned default.
 
 ---
 
 ## 7. UInt32 prime storage
 
-Primes are stored as `UInt32`, which caps them at $\sim 4.29 \times 10^9$. Since the largest prime sieved is $\sqrt{N}$, this limits the sieve endpoint to $N < (2^{32} - 1)^2 \approx 1.8 \times 10^{19}$. This is well above the bucket scheduler bound ($2.06 \times 10^{17}$), and with the ceil encoding of §5 there is no separate collision cap below $2^{64}$, so it is never the binding constraint in practice.
+Primes are stored as `UInt32`, which caps them at $\sim 4.29 \times 10^9$. Since the largest prime sieved is $\sqrt{N}$, this limits the sieve endpoint to $N < (2^{32} - 1)^2 \approx 1.8 \times 10^{19}$. This is well above the bucket scheduler bound ($2.05 \times 10^{17}$), and with the ceil encoding of §5 there is no separate collision cap below $2^{64}$, so it is never the binding constraint in practice.
 
 ---
 
@@ -228,8 +244,8 @@ The binding constraint depends on configuration:
 | Constraint | Limit | Binding when |
 |------------|-------|-------------|
 | Log-encoding byte overflow | $\sim 1.8 \times 10^{19}$ ($N < 2^{64}$) | Fundamental encoding limit (ceil scheme, §5) |
-| Bucket scheduler (`LP_SIZE=512`) | $2.06 \times 10^{17}$ | `BUCKET_SIEVE=1` (default) |
+| Bucket scheduler (`LP_SIZE=512`) | $2.05 \times 10^{17}$ | `BUCKET_SIEVE=1` (default) |
 | UInt32 primes | $1.8 \times 10^{19}$ | `BUCKET_SIEVE=0` (co-binding with the encoding) |
 | Int8 residual (`STRIDE_LOG=8`) | $1.9 \times 10^{25}$ | Compressed Mertens only |
 
-With default settings, the bucket scheduler is the most restrictive at $2.06 \times 10^{17}$. Building with `BUCKET_SIEVE=0` raises the effective limit to $\sim 1.8 \times 10^{19}$ (the encoding and UInt32 prime caps, which coincide in order of magnitude). The uniform ceil-log2 encoding (§5) is collision-free, so unlike the earlier mixed floor/`numbits` scheme there is no $1.157 \times 10^{18}$ cap.
+With default settings, the bucket scheduler is the most restrictive at $2.05 \times 10^{17}$. Building with `BUCKET_SIEVE=0` raises the effective limit to $\sim 1.8 \times 10^{19}$ (the encoding and UInt32 prime caps, which coincide in order of magnitude). The uniform ceil-log2 encoding (§5) is collision-free, so unlike the earlier mixed floor/`numbits` scheme there is no $1.157 \times 10^{18}$ cap.

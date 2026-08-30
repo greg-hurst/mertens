@@ -14,7 +14,7 @@ The algorithm produces incorrect results for small $n$. The primary cause is str
 
 More generally, if the split is changed to `nu_max = c*sqrt(n)`, then this structural threshold becomes roughly $(13860/c)^2$. Decreasing the split constant therefore raises the lower input bound, and the enforced $10^8$ lower limit should be revisited whenever this tuning is changed.
 
-Below this threshold, neither S2 nor S1 updates are performed: `partial_values` remains at its initial value of $1$ for every entry, and the back substitution produces garbage.
+Below this threshold, neither S2 nor S1 updates are performed: `partial_values` remains at its initial value of $1$ for every entry, and the final recovery produces garbage.
 
 Additional reasons the algorithm is not designed for small $n$:
 
@@ -44,7 +44,7 @@ $n$ is cast to `double` (53-bit mantissa) for `sqrt`, `cbrt`, and `log`. Precisi
 
 **Source:** `SegmentedMobiusSieve.h`
 
-The bucket scheduler for large primes uses a circular buffer of `LP_SIZE` buckets. The largest prime sieved is $\sqrt{u}$ and so we need `sqrt(u) < LP_SIZE * M2`, yielding $u = (512 \times 887\\,040)^2 \approx 2.06 \times 10^{17}$. (This is the configuration used for the record runs and described in Section 7 of the paper: `LP_SIZE = 512`, `M2 = 887,040`.)
+The bucket scheduler for large primes uses a circular buffer of `LP_SIZE` buckets. Its exact largest schedulable prime is `(LP_SIZE - 1) * M2`, so the runtime conservatively enforces $u \le (511 \times 887{,}040)^2 = 205{,}460{,}437{,}612{,}953{,}600 \approx 2.05 \times 10^{17}$. (This is the configuration used for the record runs and described in Section 7 of the paper: `LP_SIZE = 512`, `M2 = 887,040`.)
 
 With `fac == 0.75`: **max $n \approx 5.9 \times 10^{26}$** (the figure quoted in the paper). Build with `make EXTRA_CXXFLAGS=-DSIEVE_LP_SIZE=1024` to go higher (the default narrow entries store the prime as `UInt32`, and the wide packed payload supports `LP_SIZE` up to exactly 1024, so capacity is not payload-limited); the runtime cap on $u$ scales with the flag automatically. Alternatively, build with `make BUCKET_SIEVE=0` to disable the bucket scheduler entirely (all primes are sieved as medium primes via direct iteration), which removes this constraint.
 
@@ -62,7 +62,7 @@ $$u < 2^{60} - 2^{32} = 1\,152\,921\,500\,311\,879\,680 \approx 1.1529 \times 10
 
 Inverting the default $u(n)$ formula (`fac == 0.75` at this scale), the smallest input whose sieve range reaches this bound is **max $n \approx 7.9 \times 10^{27}$** — far tighter than the encoding/prime caps of constraints 5 and 8, so on `DIVISION_FREE=1` builds with the bucket scheduler disabled this constraint binds first.
 
-`SegmentedMobiusSieveCore::sieve()` asserts the bound at entry (active only in non-`NDEBUG` builds); it is not otherwise enforced at runtime, so on a `DIVISION_FREE=1` release build a manual $u$ above $2^{60} - 2^{32}$ computes incorrect quotients. In the default configuration this window is unreachable, since the bucket-scheduler cap of constraint 3 ($2.06 \times 10^{17}$) is enforced first. Build with `DIVISION_FREE=0` to remove this constraint entirely.
+`SegmentedMobiusSieveCore::sieve()` asserts the bound at entry (active only in non-`NDEBUG` builds); it is not otherwise enforced at runtime, so on a `DIVISION_FREE=1` release build a manual $u$ above $2^{60} - 2^{32}$ computes incorrect quotients. In the default configuration this window is unreachable, since the bucket-scheduler cap of constraint 3 ($2.05 \times 10^{17}$) is enforced first. Build with `DIVISION_FREE=0` to remove this constraint entirely.
 
 ---
 
@@ -129,28 +129,28 @@ Verified: no overflow observed up to $u = 13\\,694\\,622\\,981\\,236\\,974$ (the
 
 ## 10. Intermediate accumulation overflow in 64-bit paths
 
-**Source:** `S2.h`, `S1.h`, `MertensHurst.cpp`
+**Source:** `S2.h`, `S2Q6.h`, `S2Q6Modes.h`, `S1.h`, `S1Q6.h`, `MertensHurst.cpp`
 
 The final $S_2$ and $S_1$ values are each $O(x^{2/3})$ per argument $x$ and cancel to give $M(x) = O(\sqrt{x})$, but the **running** partial sums during accumulation can be larger than the final values due to incomplete cancellation. We must verify that no accumulator overflows at any intermediate step. Throughout this section, $x$ denotes the per-entry argument `partial_args[i]` $= \lfloor n/i \rfloor$; the 64-bit path handles $x < 10^{18}$.
 
 ### $S_2$ running partial sum
 
-$$S_2(x) = \sum_{k \leq \nu} \mu(k) \cdot \texttt{S2term}(x/k).$$
+The production path uses the exact outer-$Q=6$ transform in `S2Q6.h`; the original all-$Q=2$ formulation remains available through `make q2`. Both have $O(x)$ worst-case absolute accumulation, but their coefficients and cutoff regions differ.
 
-Bounding by the sum of absolute values with mode reductions (`S2_term<9>(q)` $\approx q/6$ for the smallest $k$, up to `S2_term<0>(q)` $= q$ for the largest $k$), the total sum of absolute values is $\approx 3.95x$, dominated by Mode 9's contribution of $\sim (x/6) \log \nu$. For $x < 10^{18}$ this gives $\sim 3.95 \times 10^{18}$, which fits in `Int64` by a $2.3\times$ margin.
+The earlier $\approx 3.95x$ estimate based on `S2_term<9>` through `S2_term<0>` applies specifically to the all-$Q=2$ path and should not be quoted as a proof for the transformed production path. The $Q=6$ implementation uses static signed coefficient modes with denominators dividing 36, so its accumulator bound must be evaluated from `S2Q6Modes.h`. Correctness has been stress-tested against the Q2 oracle through the supported range, but a separate tight analytic UInt64-path bound for the Q6 modes remains to be written.
 
 ### $S_1$ running partial sum
 
-$$S_1(x) = \sum_{\kappa < j \leq x} M(\lfloor x/j \rfloor).$$
+The production path likewise evaluates an exact outer-$Q=6$ combination of the $S_1$ terms at $y$, $\lfloor y/2 \rfloor$, $\lfloor y/3 \rfloor$, and $\lfloor y/6 \rfloor$; `make q2` retains the original single-stream form.
 
-Now, each $|M(q)| \le 0.571 \sqrt{q}$ empirically for $q \le 10^{16}$ ([Table 6.1, Hurst 2016](https://arxiv.org/pdf/1610.08551)). And so $S_1(x) < 0.571 \cdot \sqrt{x} \cdot 2\sqrt{x} \sim 1.14x$. For $x < 10^{18}$ this gives $\sim 1.14 \times 10^{18}$, which fits in `Int64` by an $8\times$ margin.
+For the underlying Q2 stream, each $|M(q)| \le 0.571 \sqrt{q}$ empirically for $q \le 10^{16}$ ([Table 6.1, Hurst 2016](https://arxiv.org/pdf/1610.08551)), giving the familiar estimate $S_1(x) \lesssim 1.14x$. The Q6 combination has only a fixed number of these exact streams and therefore remains $O(x)$, but its tight constant should be derived from the four active residue masks in `S1Q6.h` rather than inherited unchanged from the Q2 estimate.
 
 Note: Table 6.1 of Hurst 2016 verifies $|M(q)/\sqrt{q}| \le 0.571$ only up to $q = 10^{16}$. Extending beyond $n = 10^{25}$ pushes $u$ past $10^{16}$, so the table no longer directly covers all queried $M(q)$ values. However, the bounds above are already loose by orders of magnitude (they assume zero cancellation from $\mu$ signs), so even a modest increase in the empirical ratio should not threaten `Int64` overflow.
 
 ### `partial_values[i]` running total
 
-Each `partial_values[i]` accumulates $1 - S_2 - S_1 + \kappa \cdot M(\nu)$ across all sieve segments. In the worst case (no cancellation from $\mu$ signs), `|partial_values[i]|` $ \le 3.95x + 1.14x + 1 \approx 5.1x$. For $x < 10^{18}$ this gives $\sim 5.1 \times 10^{18}$, which fits in `Int64` by a $1.8\times$ margin. In practice, $\mu$ sign cancellation reduces the intermediate values by orders of magnitude.
+Each `partial_values[i]` accumulates the transformed $S_2$ and $S_1$ contributions plus its initialization term across all sieve segments. The former $\approx 5.1x$ estimate combines Q2-only constants and is therefore not a proof for the current Q6 production path. In practice the intermediate values remain far below `Int64` limits in the supported-range stress tests; a rigorous production bound should combine the Q6 constants described above.
 
-### Back substitution
+### Final recovery
 
-The back substitution loop subtracts already-recovered $M(n/k)$ values, each bounded by $0.571\sqrt{n/k}$. The sum of absolute values is $\sim 1.14 \cdot n^{2/3} \sim 10^{12}$, which is negligible.
+Production computes only $M(n)$ by a signed Möbius sum of the stored square-free partial values. Its accumulator therefore has the same scale as the partial-value state discussed above and is held in `Int128` whenever the leading partial values require it. The optional `FULL_RECOVERY=1` build instead performs decreasing-index back substitution of every square-free value as a correctness oracle; its recovery sum is negligible relative to the earlier S1/S2 accumulations.
