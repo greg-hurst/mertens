@@ -318,6 +318,28 @@ static inline S1OuterQ6Mode classifyS1OuterQ6(UInt64 k, UInt64 N) {
     return S1OuterQ6Mode::Single;
 }
 
+static inline UInt64 coherentS1BoundaryFactor(
+    S1OuterQ6Mode mode,
+    UInt64 commonKappa
+) {
+    switch (mode) {
+        case S1OuterQ6Mode::Full6:
+            return commonKappa
+                 - commonKappa / 2
+                 - commonKappa / 3
+                 + commonKappa / 6;
+        case S1OuterQ6Mode::Minus2Minus3:
+            return commonKappa
+                 - commonKappa / 2
+                 - commonKappa / 3;
+        case S1OuterQ6Mode::Minus2:
+            return commonKappa - commonKappa / 2;
+        case S1OuterQ6Mode::Single:
+            return commonKappa;
+    }
+    return 0;
+}
+
 // hash2 maps compact square-free indices back to their original k. The result
 // contains only k coprime to 6, eliminating repeated hot-loop residue checks.
 static inline std::vector<S1Q6WorkItem> buildS1Q6Worklist(
@@ -335,6 +357,47 @@ static inline std::vector<S1Q6WorkItem> buildS1Q6Worklist(
             work.push_back(S1Q6WorkItem{index, classifyS1OuterQ6(k, N)});
     }
     return work;
+}
+
+template<typename TArg, typename MIntT>
+static inline S1Q6Detail::Accumulator<TArg> evaluateCoherentS1OuterQ6(
+    S1OuterQ6Mode mode,
+    const TArg& y,
+    UInt64 lowerExclusive,
+    UInt64 commonKappa,
+    UInt64 L1,
+    UInt64 L2,
+    const MIntT* __restrict M,
+    const Int8* __restrict R,
+    const QuotientCache& qCache,
+    UInt64 dCAP
+) {
+    using namespace S1Q6Detail;
+
+    if (lowerExclusive == ~UInt64(0)) return 0;
+    const UInt64 lo = lowerExclusive + 1;
+
+    switch (mode) {
+        case S1OuterQ6Mode::Full6:
+            return sumClippedStream<MASK_COPRIME6>(
+                y, L1, L2, lo, commonKappa, M, R, qCache, dCAP
+            );
+        case S1OuterQ6Mode::Minus2Minus3:
+            return sumClippedStream<MASK_COPRIME6>(
+                y, L1, L2, lo, commonKappa, M, R, qCache, dCAP
+            ) - sumClippedStream<MASK_R0>(
+                y, L1, L2, lo, commonKappa, M, R, qCache, dCAP
+            );
+        case S1OuterQ6Mode::Minus2:
+            return sumClippedStream<MASK_ODD>(
+                y, L1, L2, lo, commonKappa, M, R, qCache, dCAP
+            );
+        case S1OuterQ6Mode::Single:
+            return sumClippedStream<MASK_ALL>(
+                y, L1, L2, lo, commonKappa, M, R, qCache, dCAP
+            );
+    }
+    return 0;
 }
 
 template<typename TArg, typename MIntT>

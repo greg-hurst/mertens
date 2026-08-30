@@ -28,6 +28,20 @@ static_assert(MERTENSHURST_S2_OUTER_Q6 == 0 || MERTENSHURST_S2_OUTER_Q6 == 1,
 static_assert(!UseS2OuterQ6 || UseS1OuterQ6,
               "S2 outer Q=6 requires the Q=6 global/S1 state");
 
+// Coherent Q=6 uses one split point for every active divisor in an outer
+// group. Keep it separate from the production default until the complete
+// optimized contract has passed its exactness and timing gates.
+#ifndef MERTENSHURST_COHERENT_Q6
+#define MERTENSHURST_COHERENT_Q6 0
+#endif
+static constexpr bool UseCoherentQ6 = MERTENSHURST_COHERENT_Q6;
+static_assert(MERTENSHURST_COHERENT_Q6 == 0 || MERTENSHURST_COHERENT_Q6 == 1,
+              "MERTENSHURST_COHERENT_Q6 must be 0 or 1");
+static_assert(!UseCoherentQ6 || (UseS1OuterQ6 && UseS2OuterQ6),
+              "coherent Q=6 requires both outer Q=6 transforms");
+static_assert(!MERTENSHURST_COHERENT_PERIOD36 || UseCoherentQ6,
+              "coherent period-36 requires coherent Q=6 splits");
+
 // Production needs only M(x), which follows directly from a signed sum of the
 // compact partial values. Retain full back substitution as an exact oracle.
 #ifndef MERTENSHURST_FULL_RECOVERY
@@ -36,11 +50,49 @@ static_assert(!UseS2OuterQ6 || UseS1OuterQ6,
 static constexpr bool UseFullRecovery = MERTENSHURST_FULL_RECOVERY;
 static_assert(MERTENSHURST_FULL_RECOVERY == 0 || MERTENSHURST_FULL_RECOVERY == 1,
               "MERTENSHURST_FULL_RECOVERY must be 0 or 1");
+static_assert(!UseCoherentQ6 || !UseFullRecovery,
+              "coherent Q=6 is closed to final-value recovery");
+
+#ifndef MERTENSHURST_UNORDERED_S2
+#define MERTENSHURST_UNORDERED_S2 0
+#endif
+static constexpr bool UseUnorderedS2 = MERTENSHURST_UNORDERED_S2;
+static_assert(MERTENSHURST_UNORDERED_S2 == 0
+              || MERTENSHURST_UNORDERED_S2 == 1,
+              "MERTENSHURST_UNORDERED_S2 must be 0 or 1");
+static_assert(!UseUnorderedS2 || (UseCoherentQ6
+                                  && MERTENSHURST_COHERENT_PERIOD36
+                                  && !UseFullRecovery),
+              "unordered S2 requires final-value coherent period-36 Q=6");
+
+#ifndef MERTENSHURST_VALIDATE_UNORDERED_S2
+#define MERTENSHURST_VALIDATE_UNORDERED_S2 0
+#endif
+static constexpr bool ValidateUnorderedS2 =
+    MERTENSHURST_VALIDATE_UNORDERED_S2;
+static_assert(MERTENSHURST_VALIDATE_UNORDERED_S2 == 0
+              || MERTENSHURST_VALIDATE_UNORDERED_S2 == 1,
+              "MERTENSHURST_VALIDATE_UNORDERED_S2 must be 0 or 1");
+static_assert(!ValidateUnorderedS2 || UseUnorderedS2,
+              "unordered S2 validation requires unordered S2");
+
+#ifndef MERTENSHURST_VALIDATE_UNORDERED_S2_WIDE
+#define MERTENSHURST_VALIDATE_UNORDERED_S2_WIDE 0
+#endif
+static constexpr bool ValidateUnorderedS2Wide =
+    MERTENSHURST_VALIDATE_UNORDERED_S2_WIDE;
+static_assert(MERTENSHURST_VALIDATE_UNORDERED_S2_WIDE == 0
+              || MERTENSHURST_VALIDATE_UNORDERED_S2_WIDE == 1,
+              "MERTENSHURST_VALIDATE_UNORDERED_S2_WIDE must be 0 or 1");
+static_assert(!ValidateUnorderedS2Wide || ValidateUnorderedS2,
+              "forced-wide unordered S2 requires its ordered validator");
 static constexpr bool NeedsOuterHash = !UseS1OuterQ6 || UseFullRecovery;
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <omp.h>
 #include <stdexcept>
 #include <sys/time.h>
@@ -193,14 +245,13 @@ void MertensComputer::initializeBounds(
             partialArgsDivU[i] = quotient / u;
 
             nus[i] = get_nu(quotient);
-
-            const UInt128 q2 = quotient / 2;
-            const UInt64  n2 = get_nu(q2);
-
-            kappas[i]  =   quotient / (nus[i] + 1);
-            kappas2[i] = 2 * (q2 / (n2 + 1));
-
-            s2SplitCache[i] = n2;
+            if constexpr (!UseCoherentQ6) {
+                const UInt128 q2 = quotient / 2;
+                const UInt64 n2 = get_nu(q2);
+                kappas[i] = quotient / (nus[i] + 1);
+                kappas2[i] = 2 * (q2 / (n2 + 1));
+                s2SplitCache[i] = n2;
+            }
 
             ++i;
         }
@@ -240,7 +291,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     mNuRatio = nuRatio;
 
     struct timeval start, end;
-    double t[9] = {0.0};
+    double t[10] = {0.0};
 
     constexpr UInt64 BF = SegmentedMobiusSieveCore::STENCIL_PERIOD;
     constexpr UInt64 min_B = BF * ((10000000ULL + BF - 1) / BF);
@@ -328,10 +379,12 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         hash2.assign(mx+1, 0);
         partialArgs.resize(mx+1);
         nusVec.resize(mx+1);
-        kappas.resize(mx+1);
-        kappas2.resize(mx+1);
+        if constexpr (!UseCoherentQ6) {
+            kappas.resize(mx+1);
+            kappas2.resize(mx+1);
+            s2SplitCache.resize(mx+1);
+        }
         partialArgsDivU.resize(mx+1);
-        s2SplitCache.resize(mx+1);
         if constexpr (!UseFullRecovery)
             negativeRecoverySigns.resize(static_cast<UInt32>(mx) / 64 + 1);
 
@@ -358,43 +411,96 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     std::vector<UInt64> q6Kappa1;
     std::vector<UInt64> q6Kappa2;
     std::vector<UInt64> q6S2SplitCache;
+    std::vector<UInt64> q6CommonNu;
+    std::vector<UInt64> q6CommonKappa;
+    std::vector<UInt64> q6BoundaryFactor;
+    std::vector<UInt32> q6Bases;
+    std::vector<Int8> q6Signs;
     std::vector<UInt64> s1Q6Kappa3;
     std::vector<UInt64> s1Q6Kappa6;
     std::vector<UInt64> s2Q6Nu3;
     std::vector<UInt64> s2Q6Nu6;
     std::vector<UInt32> q6WorkIndexByCompact;
+    UInt64 q6WideCount = 0;
     UInt32 compactHalf = 0;
     if constexpr (UseS1OuterQ6) {
         s1Q6Worklist = buildS1Q6Worklist(
             hash2.data(), static_cast<UInt32>(mx), nu
         );
-        s1Q6Kappa3.resize(s1Q6Worklist.size());
-        s1Q6Kappa6.resize(s1Q6Worklist.size());
-        if constexpr (UseS2OuterQ6) {
-            s2Q6Nu3.resize(s1Q6Worklist.size());
-            s2Q6Nu6.resize(s1Q6Worklist.size());
+        if constexpr (!UseCoherentQ6) {
+            s1Q6Kappa3.resize(s1Q6Worklist.size());
+            s1Q6Kappa6.resize(s1Q6Worklist.size());
+            if constexpr (UseS2OuterQ6) {
+                s2Q6Nu3.resize(s1Q6Worklist.size());
+                s2Q6Nu6.resize(s1Q6Worklist.size());
+            }
+        }
+        if constexpr (UseCoherentQ6) {
+            q6CommonNu.resize(s1Q6Worklist.size());
+            q6CommonKappa.resize(s1Q6Worklist.size());
+            q6BoundaryFactor.resize(s1Q6Worklist.size());
         }
         for (std::size_t workIndex = 0; workIndex < s1Q6Worklist.size(); ++workIndex) {
             const UInt32 index = s1Q6Worklist[workIndex].compactIndex;
             const UInt128 y = index <= cnt128
                 ? partialArgs128[index]
                 : UInt128(partialArgs[index]);
-            const UInt128 y3 = y / 3;
-            const UInt128 y6 = y / 6;
-            const UInt64 nu3 = get_nu(y3);
-            const UInt64 nu6 = get_nu(y6);
-            s1Q6Kappa3[workIndex] = static_cast<UInt64>(UInt128(3) * (y3 / (nu3 + 1)));
-            s1Q6Kappa6[workIndex] = static_cast<UInt64>(UInt128(6) * (y6 / (nu6 + 1)));
-            if constexpr (UseS2OuterQ6) {
-                s2Q6Nu3[workIndex] = nu3;
-                s2Q6Nu6[workIndex] = nu6;
+            if constexpr (UseCoherentQ6) {
+                const UInt64 commonNu = nusVec[index];
+                if (commonNu == 0 || commonNu >= u) {
+                    std::cerr << "Error: coherent Q=6 requires 1 <= nu < u"
+                              << " (nu=" << commonNu << ", u=" << u << ")."
+                              << std::endl;
+                    std::abort();
+                }
+                const UInt64 commonKappa = static_cast<UInt64>(
+                    y / UInt128(commonNu + 1)
+                );
+                q6CommonNu[workIndex] = commonNu;
+                q6CommonKappa[workIndex] = commonKappa;
+                q6BoundaryFactor[workIndex] = coherentS1BoundaryFactor(
+                    s1Q6Worklist[workIndex].mode, commonKappa
+                );
+            }
+            if constexpr (!UseCoherentQ6) {
+                const UInt128 y3 = y / 3;
+                const UInt128 y6 = y / 6;
+                const UInt64 nu3 = get_nu(y3);
+                const UInt64 nu6 = get_nu(y6);
+                s1Q6Kappa3[workIndex] = static_cast<UInt64>(
+                    UInt128(3) * (y3 / (nu3 + 1))
+                );
+                s1Q6Kappa6[workIndex] = static_cast<UInt64>(
+                    UInt128(6) * (y6 / (nu6 + 1))
+                );
+                if constexpr (UseS2OuterQ6) {
+                    s2Q6Nu3[workIndex] = nu3;
+                    s2Q6Nu6[workIndex] = nu6;
+                }
             }
         }
-        if constexpr (UseS2OuterQ6) {
+        if constexpr (UseS2OuterQ6 && !UseCoherentQ6) {
             compactHalf = static_cast<UInt32>(std::upper_bound(
                 hash2.begin(), hash2.end(), static_cast<UInt32>(nu / 2)
             ) - hash2.begin() - 1);
-            hash2 = {};
+        }
+
+        if constexpr (UseUnorderedS2) {
+            q6Bases.resize(s1Q6Worklist.size());
+            q6Signs.resize(s1Q6Worklist.size());
+            #pragma omp parallel for schedule(static) if(s1Q6Worklist.size() >= 1000000)
+            for (UInt64 workIndex = 0;
+                 workIndex < s1Q6Worklist.size();
+                 ++workIndex) {
+                const UInt32 compactIndex =
+                    s1Q6Worklist[workIndex].compactIndex;
+                q6Bases[workIndex] = hash2[compactIndex];
+                const bool negative = (
+                    negativeRecoverySigns[compactIndex >> 6]
+                    >> (compactIndex & 63)
+                ) & 1ULL;
+                q6Signs[workIndex] = negative ? -1 : 1;
+            }
         }
 
         auto compactQ6Bounds = [&](std::vector<UInt64>& compact,
@@ -410,7 +516,6 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         };
 
         compactQ6Bounds(q6PartialArgs, partialArgs, UseS2OuterQ6);
-        UInt64 q6WideCount = 0;
         while (q6WideCount < s1Q6Worklist.size()
                && s1Q6Worklist[q6WideCount].compactIndex <= cnt128) {
             ++q6WideCount;
@@ -421,19 +526,34 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             q6PartialArgs128[workIndex]
                 = partialArgs128[s1Q6Worklist[workIndex].compactIndex];
         }
+        if constexpr (ValidateUnorderedS2Wide) {
+            q6PartialArgs128.resize(s1Q6Worklist.size());
+            #pragma omp parallel for schedule(static) if(s1Q6Worklist.size() >= 1000000)
+            for (UInt64 workIndex = q6WideCount;
+                 workIndex < s1Q6Worklist.size();
+                 ++workIndex) {
+                q6PartialArgs128[workIndex] = UInt128(
+                    q6PartialArgs[workIndex]
+                );
+            }
+        }
         if constexpr (UseS2OuterQ6)
             partialArgs128 = {};
         compactQ6Bounds(q6PartialArgsDivU, partialArgsDivU, true);
-        compactQ6Bounds(q6Kappa1, kappas, false);
-        compactQ6Bounds(q6Kappa2, kappas2, true);
+        if constexpr (!UseCoherentQ6) {
+            compactQ6Bounds(q6Kappa1, kappas, false);
+            compactQ6Bounds(q6Kappa2, kappas2, true);
+        }
         if constexpr (UseS2OuterQ6) {
-            compactQ6Bounds(q6S2SplitCache, s2SplitCache, true);
+            if constexpr (!UseCoherentQ6)
+                compactQ6Bounds(q6S2SplitCache, s2SplitCache, true);
             q6WorkIndexByCompact.assign(mx + 1, 0);
             #pragma omp parallel for schedule(static) if(s1Q6Worklist.size() >= 1000000)
             for (UInt64 workIndex = 0; workIndex < s1Q6Worklist.size(); ++workIndex) {
                 q6WorkIndexByCompact[s1Q6Worklist[workIndex].compactIndex]
                     = static_cast<UInt32>(workIndex + 1);
             }
+            hash2 = {};
         }
     }
 
@@ -456,10 +576,17 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     //   P_j = A_j
     //       - 1_{(j,6)=1} sum_{d|6, dj<=N} mu(d)(T1_{dj}+T2_{dj}).
     //
-    // Every square-free slot, including auxiliary slots divisible by 2 or 3,
-    // retains A_j. This makes sum_j mu(j)P_j equal to M(x) and permits the
-    // same square-free Möbius back substitution. Compacting storage to the hot
-    // worklist would lose the constant/kappa correction terms.
+    // The coherent final-value path keeps the leading 1 in every square-free
+    // slot, but replaces the individual kappa corrections of one Q=6 group
+    // by H_D(Q)M(v) in its coprime base slot. Signed final recovery therefore
+    // sees the exact grouped boundary term. This representation is purposely
+    // incompatible with full per-slot back substitution.
+    //
+    // The natural paths retain A_j in every square-free slot, including the
+    // auxiliary slots divisible by 2 or 3, and therefore also permit complete
+    // back substitution. All paths retain the leading constant in those slots;
+    // the coherent grouped correction is closed only under signed final-value
+    // recovery as stated above.
     //
     // partialValues starts with the leading 1 in A_j. The kappa term is added
     // incrementally below; the S1/S2 transformed terms are subtracted by their
@@ -519,6 +646,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     // values land in processed sieve segments.
     Int32 j = mx;
     UInt64 osqrt = nusVec[j];
+    Int64 coherentBoundaryIndex = static_cast<Int64>(q6CommonNu.size()) - 1;
 
     // S2 work gets split into CHUNK_LEN-sized chunks for OpenMP.
     // needs to be > cbrt(n) so chunks stay in the quotient predictor range.
@@ -541,21 +669,41 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 const S1Q6WorkItem& item = s1Q6Worklist[workIndex];
                 const UInt32 index = item.compactIndex;
                 if (__builtin_expect(index > cnt128, true)) {
-                    partialValues[index] -= evaluateS1OuterQ6(
-                        item.mode, q6PartialArgs[workIndex],
-                        q6PartialArgsDivU[workIndex], q6Kappa1[workIndex],
-                        q6Kappa2[workIndex],
-                        s1Q6Kappa3[workIndex], s1Q6Kappa6[workIndex],
-                        segmentLo, segmentHi, mertensCoarse, residual, qCache, dCAP
-                    );
+                    if constexpr (UseCoherentQ6) {
+                        partialValues[index] -= evaluateCoherentS1OuterQ6(
+                            item.mode, q6PartialArgs[workIndex],
+                            q6PartialArgsDivU[workIndex], q6CommonKappa[workIndex],
+                            segmentLo, segmentHi, mertensCoarse, residual,
+                            qCache, dCAP
+                        );
+                    } else {
+                        partialValues[index] -= evaluateS1OuterQ6(
+                            item.mode, q6PartialArgs[workIndex],
+                            q6PartialArgsDivU[workIndex], q6Kappa1[workIndex],
+                            q6Kappa2[workIndex],
+                            s1Q6Kappa3[workIndex], s1Q6Kappa6[workIndex],
+                            segmentLo, segmentHi, mertensCoarse, residual,
+                            qCache, dCAP
+                        );
+                    }
                 } else {
-                    partialValues128[index] -= evaluateS1OuterQ6(
-                        item.mode, q6PartialArgs128[workIndex],
-                        q6PartialArgsDivU[workIndex], q6Kappa1[workIndex],
-                        q6Kappa2[workIndex],
-                        s1Q6Kappa3[workIndex], s1Q6Kappa6[workIndex],
-                        segmentLo, segmentHi, mertensCoarse, residual, qCache, dCAP
-                    );
+                    if constexpr (UseCoherentQ6) {
+                        partialValues128[index] -= evaluateCoherentS1OuterQ6(
+                            item.mode, q6PartialArgs128[workIndex],
+                            q6PartialArgsDivU[workIndex], q6CommonKappa[workIndex],
+                            segmentLo, segmentHi, mertensCoarse, residual,
+                            qCache, dCAP
+                        );
+                    } else {
+                        partialValues128[index] -= evaluateS1OuterQ6(
+                            item.mode, q6PartialArgs128[workIndex],
+                            q6PartialArgsDivU[workIndex], q6Kappa1[workIndex],
+                            q6Kappa2[workIndex],
+                            s1Q6Kappa3[workIndex], s1Q6Kappa6[workIndex],
+                            segmentLo, segmentHi, mertensCoarse, residual,
+                            qCache, dCAP
+                        );
+                    }
                 }
             }
         } else {
@@ -614,10 +762,300 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         std::abort();
     };
 
+    Int128 unorderedS2Square = 0;
+    if constexpr (UseUnorderedS2) {
+        START_PROFILE();
+
+        const UInt64 unorderedWideCount = ValidateUnorderedS2Wide
+                                        ? q6Bases.size()
+                                        : q6WideCount;
+
+#ifndef NDEBUG
+        for (std::size_t index = 1; index < q6Bases.size(); ++index) {
+            assert(q6Bases[index - 1] < q6Bases[index]);
+            assert(q6CommonNu[index - 1] >= q6CommonNu[index]);
+        }
+#endif
+
+        auto countBasesAtMost = [&](UInt64 value, UInt32 limit) -> UInt32 {
+            if (value >= std::numeric_limits<UInt32>::max()) return limit;
+            return static_cast<UInt32>(std::upper_bound(
+                q6Bases.begin(), q6Bases.begin() + limit,
+                static_cast<UInt32>(value)
+            ) - q6Bases.begin());
+        };
+
+        auto countSplitAtLeast = [&](UInt64 value, UInt32 limit) -> UInt32 {
+            UInt32 lo = 0;
+            UInt32 hi = limit;
+            while (lo < hi) {
+                const UInt32 middle = lo + (hi - lo) / 2;
+                if (q6CommonNu[middle] >= value)
+                    lo = middle + 1;
+                else
+                    hi = middle;
+            }
+            return lo;
+        };
+
+        const std::array<UInt32, 3> outerClassCutoffs = {
+            countBasesAtMost(
+                nu / 6, static_cast<UInt32>(q6Bases.size())
+            ),
+            countBasesAtMost(
+                nu / 3, static_cast<UInt32>(q6Bases.size())
+            ),
+            countBasesAtMost(
+                nu / 2, static_cast<UInt32>(q6Bases.size())
+            )
+        };
+        UInt32 cacheCutoff = 0;
+        if constexpr (UseDivisionFree) {
+            cacheCutoff = countBasesAtMost(
+                dCAP, static_cast<UInt32>(q6Bases.size())
+            );
+        }
+
+        auto evaluateRow = [&](UInt32 bi) -> Int128 {
+            const UInt64 b = q6Bases[bi];
+            const UInt64 reverseNu = q6CommonNu[bi];
+            const UInt32 forwardActive = countSplitAtLeast(b, bi);
+            const UInt32 reverseActive = countBasesAtMost(reverseNu, bi);
+            const UInt32 rowEnd = std::max(forwardActive, reverseActive);
+
+            Int128 diagonal = 0;
+            const std::size_t diagonalInner = CoherentS2Q6::innerClass(
+                b, reverseNu
+            );
+            if (diagonalInner < CoherentS2Q6::ClassCount) {
+                const std::size_t diagonalMode = CoherentS2Q6::modeIndex(
+                    q6OuterClass(bi), diagonalInner
+                );
+                if (bi < unorderedWideCount) {
+                    const Int128 quotient = static_cast<Int128>(
+                        q6PartialArgs128[bi] / b
+                    );
+                    diagonal = CoherentS2Q6::evaluatePeriodKernelValue(
+                        CoherentS2Q6::PeriodTable[diagonalMode], quotient
+                    );
+                } else {
+                    const Int64 quotient = static_cast<Int64>(
+                        q6PartialArgs[bi] / b
+                    );
+                    diagonal = Int128(
+                        CoherentS2Q6::evaluatePeriodKernelValue(
+                            CoherentS2Q6::PeriodTable[diagonalMode], quotient
+                        )
+                    );
+                }
+            }
+            if (rowEnd == 0) return diagonal;
+
+            std::array<UInt32, 14> endpoints{};
+            std::size_t endpointCount = 0;
+            auto addEndpoint = [&](UInt32 endpoint) {
+                endpoints[endpointCount++] = std::min(endpoint, rowEnd);
+            };
+
+            addEndpoint(0);
+            addEndpoint(rowEnd);
+            addEndpoint(countSplitAtLeast(6 * b, bi));
+            addEndpoint(countSplitAtLeast(3 * b, bi));
+            addEndpoint(countSplitAtLeast(2 * b, bi));
+            addEndpoint(forwardActive);
+            addEndpoint(countBasesAtMost(reverseNu / 6, bi));
+            addEndpoint(countBasesAtMost(reverseNu / 3, bi));
+            addEndpoint(countBasesAtMost(reverseNu / 2, bi));
+            addEndpoint(reverseActive);
+            addEndpoint(outerClassCutoffs[0]);
+            addEndpoint(outerClassCutoffs[1]);
+            addEndpoint(outerClassCutoffs[2]);
+            if constexpr (UseDivisionFree)
+                addEndpoint(cacheCutoff);
+
+            std::sort(endpoints.begin(), endpoints.begin() + endpointCount);
+            endpointCount = static_cast<std::size_t>(std::unique(
+                endpoints.begin(), endpoints.begin() + endpointCount
+            ) - endpoints.begin());
+
+            Int128 offDiagonal = 0;
+            for (std::size_t cell = 1; cell < endpointCount; ++cell) {
+                const UInt32 cellBegin = endpoints[cell - 1];
+                const UInt32 cellEnd = endpoints[cell];
+                if (cellBegin == cellEnd) continue;
+
+                const UInt64 a = q6Bases[cellBegin];
+                const std::size_t forwardInner = CoherentS2Q6::innerClass(
+                    b, q6CommonNu[cellBegin]
+                );
+                const std::size_t reverseInner = CoherentS2Q6::innerClass(
+                    a, reverseNu
+                );
+                const bool forward =
+                    forwardInner < CoherentS2Q6::ClassCount;
+                const bool reverse =
+                    reverseInner < CoherentS2Q6::ClassCount;
+                if (!forward && !reverse) continue;
+
+                std::size_t forwardMode = 0;
+                std::size_t reverseMode = 0;
+                if (forward) {
+                    forwardMode = CoherentS2Q6::modeIndex(
+                        q6OuterClass(cellBegin), forwardInner
+                    );
+                }
+                if (reverse) {
+                    reverseMode = CoherentS2Q6::modeIndex(
+                        q6OuterClass(bi), reverseInner
+                    );
+                }
+
+                const CoherentS2Q6::PeriodKernel& kernel =
+                    forward && reverse
+                    ? CoherentS2Q6::PairPeriodTable[forwardMode][reverseMode]
+                    : CoherentS2Q6::PeriodTable[
+                        forward ? forwardMode : reverseMode
+                    ];
+
+                if (bi < unorderedWideCount) {
+                    const UInt128 numerator = q6PartialArgs128[bi];
+                    for (UInt32 ai = cellBegin; ai < cellEnd; ++ai) {
+                        const Int128 quotient = static_cast<Int128>(
+                            numerator / q6Bases[ai]
+                        );
+                        const Int128 value =
+                            CoherentS2Q6::evaluatePeriodKernelValue(
+                                kernel, quotient
+                            );
+                        offDiagonal += q6Signs[ai] < 0 ? -value : value;
+                    }
+                } else {
+                    const UInt64 numerator = q6PartialArgs[bi];
+                    auto accumulateCell = [&](auto&& quotientAt) {
+                        for (UInt32 ai = cellBegin; ai < cellEnd; ++ai) {
+                            const Int64 quotient = static_cast<Int64>(
+                                quotientAt(q6Bases[ai])
+                            );
+                            const Int64 value =
+                                CoherentS2Q6::evaluatePeriodKernelValue(
+                                    kernel, quotient
+                                );
+                            offDiagonal += q6Signs[ai] < 0
+                                ? -Int128(value)
+                                : Int128(value);
+                        }
+                    };
+
+                    if constexpr (UseDivisionFree) {
+                        if (q6Bases[cellBegin] <= dCAP) {
+                            accumulateCell([&](UInt64 denominator) {
+                                return qCache.quotient(numerator, denominator);
+                            });
+                        } else {
+                            accumulateCell([&](UInt64 denominator) {
+                                return numerator / denominator;
+                            });
+                        }
+                    } else {
+                        accumulateCell([&](UInt64 denominator) {
+                            return numerator / denominator;
+                        });
+                    }
+                }
+            }
+
+            return diagonal + (q6Signs[bi] < 0
+                ? -offDiagonal
+                : offDiagonal);
+        };
+
+        std::vector<Int128> threadTotals(omp_get_max_threads(), Int128(0));
+        #pragma omp parallel
+        {
+            Int128 local = 0;
+            #pragma omp for schedule(dynamic, 4)
+            for (UInt64 bi = 0; bi < q6Bases.size(); ++bi)
+                local += evaluateRow(static_cast<UInt32>(bi));
+            threadTotals[omp_get_thread_num()] = local;
+        }
+        for (Int128 total : threadTotals)
+            unorderedS2Square += total;
+
+        if constexpr (ValidateUnorderedS2) {
+            std::vector<Int128> orderedThreadTotals(
+                omp_get_max_threads(), Int128(0)
+            );
+            #pragma omp parallel
+            {
+                Int128 local = 0;
+                #pragma omp for schedule(dynamic, 1)
+                for (UInt64 ai = 0; ai < q6Bases.size(); ++ai) {
+                    const UInt64 split = q6CommonNu[ai];
+                    const UInt32 innerCount = countBasesAtMost(
+                        std::min<UInt64>(nu, split),
+                        static_cast<UInt32>(q6Bases.size())
+                    );
+                    const UInt32 outerClass = q6OuterClass(
+                        static_cast<UInt32>(ai)
+                    );
+                    Int128 row = 0;
+                    for (UInt32 bi = 0; bi < innerCount; ++bi) {
+                        const std::size_t innerClass =
+                            CoherentS2Q6::innerClass(q6Bases[bi], split);
+                        if (innerClass >= CoherentS2Q6::ClassCount) continue;
+                        Int128 value;
+                        if (ai < unorderedWideCount) {
+                            const Int128 quotient = static_cast<Int128>(
+                                q6PartialArgs128[ai] / q6Bases[bi]
+                            );
+                            value = CoherentS2Q6::evaluateDivisorClasses(
+                                outerClass, innerClass, quotient
+                            );
+                        } else {
+                            const Int64 quotient = static_cast<Int64>(
+                                q6PartialArgs[ai] / q6Bases[bi]
+                            );
+                            value = Int128(CoherentS2Q6::evaluateDivisorClasses(
+                                outerClass, innerClass, quotient
+                            ));
+                        }
+                        row += Int128(q6Signs[bi]) * value;
+                    }
+                    local += Int128(q6Signs[ai]) * row;
+                }
+                orderedThreadTotals[omp_get_thread_num()] = local;
+            }
+
+            Int128 orderedS2Square = 0;
+            for (Int128 total : orderedThreadTotals)
+                orderedS2Square += total;
+            if (orderedS2Square != unorderedS2Square) {
+                std::cerr << "Internal error: unordered S2 square mismatch."
+                          << std::endl;
+                std::abort();
+            }
+        }
+
+        q6Bases = {};
+        q6Signs = {};
+        END_PROFILE(t[9]);
+    }
+
     auto applyS2_64 = [&](UInt32 index, UInt64 lo, UInt64 hi,
                           bool currentHalf) -> Int64 {
+        if constexpr (UseUnorderedS2) {
+            lo = std::max(lo, nu + 1);
+            if (lo > hi) return 0;
+        }
         if constexpr (UseS2OuterQ6) {
             const UInt32 workIndex = q6WorkIndex(index);
+            if constexpr (UseCoherentQ6) {
+                const UInt64 commonNu = q6CommonNu[workIndex];
+                return update_S2_coherent_q6(
+                    q6PartialArgs[workIndex], L1, lo, hi, MuP,
+                    q6OuterClass(workIndex), commonNu, qCache, dCAP
+                );
+            }
             return update_S2_q6<S2Q6Spec>(
                 q6PartialArgs[workIndex], L1, lo, hi, MuP,
                 q6OuterClass(workIndex), nusVec[index], q6S2SplitCache[workIndex],
@@ -633,8 +1071,19 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 
     auto applyS2_128 = [&](UInt32 index, UInt64 lo, UInt64 hi,
                            bool currentHalf) -> Int128 {
+        if constexpr (UseUnorderedS2) {
+            lo = std::max(lo, nu + 1);
+            if (lo > hi) return 0;
+        }
         if constexpr (UseS2OuterQ6) {
             const UInt32 workIndex = q6WorkIndex(index);
+            if constexpr (UseCoherentQ6) {
+                const UInt64 commonNu = q6CommonNu[workIndex];
+                return update_S2_coherent_q6_128(
+                    q6PartialArgs128[workIndex], L1, lo, hi, MuP,
+                    q6OuterClass(workIndex), commonNu
+                );
+            }
             return update_S2_q6_128<S2Q6Spec>(
                 q6PartialArgs128[workIndex], L1, lo, hi, MuP,
                 q6OuterClass(workIndex), nusVec[index], q6S2SplitCache[workIndex],
@@ -667,54 +1116,64 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             // ------------ S2 Step ------------
             START_PROFILE();
             chunks.clear();
-            for (UInt32 i = 1; i <= (UInt32)mx0; ++i) {
-                if (isS2Active(i)) {
-                    const UInt64 m = std::min(L2, nusVec[i]);
-                    if (L1 > m) { mx0 = i-1; break; }
+            const UInt64 s2SegmentLo = UseUnorderedS2
+                ? std::max(L1, nu + 1)
+                : L1;
+            if (s2SegmentLo <= L2) {
+                for (UInt32 i = 1; i <= (UInt32)mx0; ++i) {
+                    if (isS2Active(i)) {
+                        const UInt64 m = std::min(L2, nusVec[i]);
+                        if (s2SegmentLo > m) { mx0 = i-1; break; }
 
-                    for (UInt64 a = L1; a <= m; a += CHUNK_LEN)
-                        chunks.push_back(Chunk{i, a, std::min(a + CHUNK_LEN - 1, m)});
+                        for (UInt64 a = s2SegmentLo; a <= m; a += CHUNK_LEN) {
+                            chunks.push_back(Chunk{
+                                i, a, std::min(a + CHUNK_LEN - 1, m)
+                            });
+                        }
+                    }
                 }
-            }
 
-            // dynamic: cost per chunk varies wildly (small k is O(sqrt(x/k)),
-            // large k is basically free)
-            #pragma omp parallel for schedule(dynamic, 1)
-            for (std::size_t tt = 0; tt < chunks.size(); ++tt) {
-                const Chunk& c = chunks[tt];
-                const UInt32 i = c.i;
-                if (__builtin_expect(i > cnt128, true)) {
-                    const Int64 v = applyS2_64(i, c.a, c.b, true);
-                    #pragma omp atomic
-                    partialValues[i] -= v;
-                } else {
-                    const Int128 v = applyS2_128(i, c.a, c.b, true);
-                    #pragma omp critical
-                    partialValues128[i] -= v;
-                }
-            }
-
-            if (mx1 > mx0) {
-                while (mx1 > mx0 && nusVec[mx1] < L1) { --mx1; }
-
+                // dynamic: cost per chunk varies wildly (small k is
+                // O(sqrt(x/k)), large k is basically free)
                 #pragma omp parallel for schedule(dynamic, 1)
-                for (UInt64 i = mx0+1; i <= (UInt64)mx1; ++i) {
-                    if (isS2Active(static_cast<UInt32>(i))) {
-                        const bool currentHalf = isCurrentHalf(static_cast<UInt32>(i));
-                        if (__builtin_expect(i > cnt128, true)) {
-                            const Int64 v = applyS2_64(
-                                static_cast<UInt32>(i), L1,
-                                std::min(L2, nusVec[i]), currentHalf
-                            );
+                for (std::size_t tt = 0; tt < chunks.size(); ++tt) {
+                    const Chunk& c = chunks[tt];
+                    const UInt32 i = c.i;
+                    if (__builtin_expect(i > cnt128, true)) {
+                        const Int64 v = applyS2_64(i, c.a, c.b, true);
+                        #pragma omp atomic
+                        partialValues[i] -= v;
+                    } else {
+                        const Int128 v = applyS2_128(i, c.a, c.b, true);
+                        #pragma omp critical
+                        partialValues128[i] -= v;
+                    }
+                }
 
-                            partialValues[i] -= v;
-                        } else {
-                            const Int128 v = applyS2_128(
-                                static_cast<UInt32>(i), L1,
-                                std::min(L2, nusVec[i]), currentHalf
-                            );
+                if (mx1 > mx0) {
+                    while (mx1 > mx0 && nusVec[mx1] < s2SegmentLo) { --mx1; }
 
-                            partialValues128[i] -= v;
+                    #pragma omp parallel for schedule(dynamic, 1)
+                    for (UInt64 i = mx0+1; i <= (UInt64)mx1; ++i) {
+                        if (isS2Active(static_cast<UInt32>(i))) {
+                            const bool currentHalf = isCurrentHalf(
+                                static_cast<UInt32>(i)
+                            );
+                            if (__builtin_expect(i > cnt128, true)) {
+                                const Int64 v = applyS2_64(
+                                    static_cast<UInt32>(i), s2SegmentLo,
+                                    std::min(L2, nusVec[i]), currentHalf
+                                );
+
+                                partialValues[i] -= v;
+                            } else {
+                                const Int128 v = applyS2_128(
+                                    static_cast<UInt32>(i), s2SegmentLo,
+                                    std::min(L2, nusVec[i]), currentHalf
+                                );
+
+                                partialValues128[i] -= v;
+                            }
                         }
                     }
                 }
@@ -727,14 +1186,39 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             END_PROFILE(t[prof_base + 2]);
 
             // ------------ Extra term Step ------------
-            while (j && osqrt <= L2) {
-                const Int64 mval = static_cast<Int64>(GET_M(_MP, RP, L1, osqrt));
-                if (__builtin_expect((UInt32)j > cnt128, true))
-                    partialValues[j] += static_cast<Int64>(kappas[j]) * mval;
-                else
-                    partialValues128[j] += kappas[j] * static_cast<Int128>(mval);
+            if constexpr (UseCoherentQ6) {
+                while (coherentBoundaryIndex >= 0
+                       && q6CommonNu[coherentBoundaryIndex] <= L2) {
+                    const UInt64 workIndex = static_cast<UInt64>(
+                        coherentBoundaryIndex
+                    );
+                    const UInt32 index = s1Q6Worklist[workIndex].compactIndex;
+                    const Int64 mval = static_cast<Int64>(GET_M(
+                        _MP, RP, L1, q6CommonNu[workIndex]
+                    ));
+                    if (__builtin_expect(index > cnt128, true)) {
+                        partialValues[index] += static_cast<Int64>(
+                            q6BoundaryFactor[workIndex]
+                        ) * mval;
+                    } else {
+                        partialValues128[index] += Int128(
+                            q6BoundaryFactor[workIndex]
+                        ) * Int128(mval);
+                    }
+                    --coherentBoundaryIndex;
+                }
+            } else {
+                while (j && osqrt <= L2) {
+                    const Int64 mval = static_cast<Int64>(
+                        GET_M(_MP, RP, L1, osqrt)
+                    );
+                    if (__builtin_expect((UInt32)j > cnt128, true))
+                        partialValues[j] += static_cast<Int64>(kappas[j]) * mval;
+                    else
+                        partialValues128[j] += kappas[j] * static_cast<Int128>(mval);
 
-                osqrt = nusVec[--j];
+                    osqrt = nusVec[--j];
+                }
             }
 
             L1 = L2 + 1;
@@ -773,6 +1257,10 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         s2Q6Nu3 = {};
         s2Q6Nu6 = {};
         q6WorkIndexByCompact = {};
+    }
+    if constexpr (UseCoherentQ6) {
+        q6CommonNu = {};
+        q6BoundaryFactor = {};
     }
 
     // Loop 2 only does S1 (S2 is done after Loop 0/1), so segments can be
@@ -819,10 +1307,17 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 
     Int64 result;
     if constexpr (!UseFullRecovery) {
-        result = static_cast<Int64>(recoverSquarefreeFinalValue(
+        Int128 recovered = recoverSquarefreeFinalValue(
             partialValues, partialValues128, cnt128, negativeRecoverySigns,
             static_cast<UInt32>(mx)
-        ));
+        );
+        if constexpr (UseUnorderedS2)
+            recovered -= unorderedS2Square;
+#ifndef NDEBUG
+        assert(recovered >= Int128(std::numeric_limits<Int64>::min()));
+        assert(recovered <= Int128(std::numeric_limits<Int64>::max()));
+#endif
+        result = static_cast<Int64>(recovered);
     } else {
         START_PROFILE();
         if (cnt128 > 0) {
@@ -840,7 +1335,8 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     }
 
     if (profile) {
-        double tot = t[0] + t[1] + t[2] + t[3] + t[4] + t[5] + t[6] + t[7] + t[8];
+        double tot = t[0] + t[1] + t[2] + t[3] + t[4]
+                   + t[5] + t[6] + t[7] + t[8] + t[9];
 
         std::cout << std::endl;
         std::cout << "-------------- Parameters -------------------" << std::endl;
@@ -867,7 +1363,11 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         std::cout << "------------------ Totals -------------------" << std::endl;
         std::cout << "          Sieve: " << (t[0]+t[3]+t[6]) << ", " << (100.0*(t[0]+t[3]+t[6])/tot) << "%" << std::endl;
         std::cout << "             S1: " << (t[2]+t[5]+t[7]) << ", " << (100.0*(t[2]+t[5]+t[7])/tot) << "%" << std::endl;
-        std::cout << "             S2: " << (t[1]+t[4]     ) << ", " << (100.0*(t[1]+t[4]     )/tot) << "%" << std::endl;
+        std::cout << "             S2: " << (t[1]+t[4]+t[9]) << ", " << (100.0*(t[1]+t[4]+t[9])/tot) << "%" << std::endl;
+        if constexpr (UseUnorderedS2) {
+            std::cout << "   Unordered S2: " << t[9] << ", "
+                      << (100.0*t[9]/tot) << "%" << std::endl;
+        }
         if constexpr (UseFullRecovery) {
             std::cout << "Back substitution: " << t[8] << ", " << (100.0*t[8]/tot) << "%" << std::endl;
         }

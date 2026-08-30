@@ -52,6 +52,50 @@ inline constexpr std::array<std::int8_t, kRawCellCount> kRemovedSigns = { 1, -1,
 inline constexpr std::array<std::uint8_t, kRawCellCount> kRemovedBasisIndices = { 8, 7, 6, 7, 4, 5, 6, 4, 4, 2, 3, 4, 1, 2, 1, 0, 7, 6, 4, 5, 4, 4, 2, 3, 1, 2, 1, 0, 6, 4, 4, 2, 3, 1, 1, 0, 4, 2, 1, 0 };
 inline constexpr std::array<std::size_t, kOuterClassCount + 1> kOuterClassCellOffsets = { 0, 16, 28, 36, 40 };
 
+inline constexpr bool rawCellTransitionsAreValid() {
+    if (kOuterClassCellOffsets[0] != 0
+        || kOuterClassCellOffsets[kOuterClassCount] != kRawCellCount)
+        return false;
+
+    for (std::size_t outerClass = 0;
+         outerClass < kOuterClassCount;
+         ++outerClass) {
+        const std::size_t begin = kOuterClassCellOffsets[outerClass];
+        const std::size_t end = kOuterClassCellOffsets[outerClass + 1];
+        if (begin >= end || end > kRawCellCount) return false;
+
+        std::array<std::int32_t, kBasisCount> coefficients =
+            kCoefficients[static_cast<std::size_t>(kRawCellModes[begin])];
+        for (std::size_t cell = begin; cell < end; ++cell) {
+            if (kCutoffOuterDivisors[cell] != 1
+                && kCutoffOuterDivisors[cell] != 2
+                && kCutoffOuterDivisors[cell] != 3
+                && kCutoffOuterDivisors[cell] != 6)
+                return false;
+            if (kCutoffInnerDivisors[cell] != 1
+                && kCutoffInnerDivisors[cell] != 2
+                && kCutoffInnerDivisors[cell] != 3
+                && kCutoffInnerDivisors[cell] != 6)
+                return false;
+            if (kRemovedBasisIndices[cell] >= kBasisCount) return false;
+            const auto& expected = kCoefficients[
+                static_cast<std::size_t>(kRawCellModes[cell])
+            ];
+            for (std::size_t basis = 0; basis < kBasisCount; ++basis) {
+                if (coefficients[basis] != expected[basis]) return false;
+            }
+
+            coefficients[kRemovedBasisIndices[cell]] -= kRemovedSigns[cell];
+        }
+        for (std::int32_t coefficient : coefficients) {
+            if (coefficient != 0) return false;
+        }
+    }
+    return true;
+}
+static_assert(rawCellTransitionsAreValid(),
+              "outer-Q6 S2 cell transitions must reproduce every mode");
+
 template<Mode ModeValue, typename T>
 struct Term;
 

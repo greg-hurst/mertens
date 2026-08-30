@@ -12,6 +12,14 @@ All performance-only: every configuration computes the same $M(n)$. The Makefile
 | `S2_OUTER_Q6` | 1 | Exact outer $Q=6$ for $S_2$. It requires `S1_OUTER_Q6=1`. Together with inner Q6 this is the normal `build/mertens` path; `make q2` preserves the all-Q2 oracle as `build/mertens_q2`. |
 | `FULL_RECOVERY` | 0 | Recover every square-free partial value by decreasing-index back substitution. Production instead obtains only the requested final value by direct Möbius inversion. The full path is retained as a correctness oracle. Becomes `-DMERTENSHURST_FULL_RECOVERY`; enable it with `make FULL_RECOVERY=1`. |
 
+`make s2-unordered` builds the opt-in `build/mertens_s2_unordered` profile.
+The target fixes the complete compatible contract rather than exposing partial
+combinations: final-value recovery, both outer-$Q=6$ transforms, coherent split
+ownership, generated period-36 kernels, and the unordered hot-$S_2$ square.
+The ordered-square validation comparator is compile-time disabled in that
+release profile. Incompatible partial combinations are rejected by static
+assertions in `MertensHurst.cpp`.
+
 The MertensHurst Makefile names its narrow-entry setting `SIEVE_BUCKET_NARROW_ENTRY`; the standalone sieve Makefile names the corresponding setting `NARROW_ENTRY`. Both produce the compiler define `SIEVE_NARROW_ENTRY`.
 
 Any sieve define can be passed through the hook, e.g. `make EXTRA_CXXFLAGS="-DSIEVE_LP_SIZE=1024"`.

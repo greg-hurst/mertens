@@ -22,12 +22,19 @@ Linux builds with the same `make`. On Windows use WSL (see the top-level README)
 ```
 make        # build the binary
 make q2     # build the original all-Q2 reference binary
+make s2-unordered  # build the coherent period-36/unordered-S2 profile
 make clean  # remove build artifacts
 ```
 
 The normal binary, `build/mertens`, uses exact outer-$Q=6$ transforms for both
 $S_1$ and $S_2$. The reference target produces `build/mertens_q2`; it is slower
 but computes the same result through the original all-$Q=2$ path.
+
+The opt-in `s2-unordered` target produces `build/mertens_s2_unordered`. It is
+a contract-closed final-value profile: coherent outer-$Q=6$ splits, generated
+period-36 kernels, and exact unordered hot-$S_2$ pairing are enabled together,
+while full recovery and the expensive ordered-square validator are disabled.
+Its runtime interface and exact result are the same as `build/mertens`.
 
 ### Division-free mode
 

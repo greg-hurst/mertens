@@ -59,6 +59,23 @@ Q2_CXXFLAGS = $(filter-out -DMERTENSHURST_S1_OUTER_Q6=% \
                             -DMERTENSHURST_S2_OUTER_Q6=%,$(CXXFLAGS)) \
               -DMERTENSHURST_S1_OUTER_Q6=0 \
               -DMERTENSHURST_S2_OUTER_Q6=0
+UNORDERED_S2_CXXFLAGS = $(filter-out \
+              -DMERTENSHURST_FULL_RECOVERY=% \
+              -DMERTENSHURST_S1_OUTER_Q6=% \
+              -DMERTENSHURST_S2_OUTER_Q6=% \
+              -DMERTENSHURST_COHERENT_Q6=% \
+              -DMERTENSHURST_COHERENT_PERIOD36=% \
+              -DMERTENSHURST_UNORDERED_S2=% \
+              -DMERTENSHURST_VALIDATE_UNORDERED_S2=% \
+              -DMERTENSHURST_VALIDATE_UNORDERED_S2_WIDE=%,$(CXXFLAGS)) \
+              -DMERTENSHURST_FULL_RECOVERY=0 \
+              -DMERTENSHURST_S1_OUTER_Q6=1 \
+              -DMERTENSHURST_S2_OUTER_Q6=1 \
+              -DMERTENSHURST_COHERENT_Q6=1 \
+              -DMERTENSHURST_COHERENT_PERIOD36=1 \
+              -DMERTENSHURST_UNORDERED_S2=1 \
+              -DMERTENSHURST_VALIDATE_UNORDERED_S2=0 \
+              -DMERTENSHURST_VALIDATE_UNORDERED_S2_WIDE=0
 LDFLAGS  :=
 
 # --- Platform-specific: OpenMP ---
@@ -76,11 +93,13 @@ BUILDDIR = build
 SIEVEDIR = ../sieve
 SRCS     = $(SRCDIR)/MertensHurst.cpp $(SIEVEDIR)/SegmentedMobiusSieve.cpp $(SRCDIR)/main.cpp
 
-.PHONY: all q2 clean
+.PHONY: all q2 s2-unordered clean
 
 all: $(BUILDDIR)/mertens
 
 q2: $(BUILDDIR)/mertens_q2
+
+s2-unordered: $(BUILDDIR)/mertens_s2_unordered
 
 $(BUILDDIR)/mertens: $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
 	@mkdir -p $(BUILDDIR)
@@ -89,6 +108,10 @@ $(BUILDDIR)/mertens: $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.
 $(BUILDDIR)/mertens_q2: $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
 	@mkdir -p $(BUILDDIR)
 	$(CXX) $(Q2_CXXFLAGS) $(SRCS) -o $@ $(LDFLAGS)
+
+$(BUILDDIR)/mertens_s2_unordered: $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
+	@mkdir -p $(BUILDDIR)
+	$(CXX) $(UNORDERED_S2_CXXFLAGS) $(SRCS) -o $@ $(LDFLAGS)
 
 clean:
 	rm -rf $(BUILDDIR)
