@@ -35,6 +35,15 @@ Cumulative standalone times through the listed endpoint (Table 5 of the paper; s
 | $10^{13}$ | 433.7 s | 469.3 s |
 | $10^{16}$ | 7.00 d | 7.39 d |
 
+Current-branch cumulative timings at the larger endpoints, using
+400-billion-value segments, are:
+
+| $N$ | `v1.0` $\mu$ sieve | Current $\mu$ sieve | Speedup | `v1.0` $\mu + M$ sieve | Current $\mu + M$ sieve | Speedup |
+|-----:|--------------------:|---------------------:|--------:|------------------------:|-------------------------:|--------:|
+| $10^{14}$ | 1.38 h | 1.0834 h | **1.274x** | 1.48 h | 1.1621 h | **1.274x** |
+| $10^{15}$ | 15.34 h | 12.2748 h | **1.250x** | 16.27 h | 13.0278 h | **1.249x** |
+| $10^{16}$ | 7.00 d | 5.7382 d | **1.220x** | 7.39 d | 6.0173 d | **1.228x** |
+
 The Mertens sieve costs slightly more than the Mobius sieve alone, since it adds the segmented prefix sum into the compressed representation.
 
 Throughput scales linearly with $N$. The constant factor depends on the segment size (larger segments amortize prime-list setup, with diminishing returns past $\sim 10^7$), whether the bucket scheduler is enabled (faster when large primes are present), whether division-free mode is active (beneficial on x86, not used on ARM where hardware division is fast), and the SIMD backend.
