@@ -96,6 +96,7 @@ static constexpr bool NeedsOuterHash = !UseS1OuterQ6 || UseFullRecovery;
 #include <omp.h>
 #include <stdexcept>
 #include <sys/time.h>
+#include <vector>
 
 // ============================================================================
 // Timing helpers
@@ -114,6 +115,11 @@ static inline double getDuration(timeval& start, timeval& end) {
     getDayTime(end); (t) += getDuration(start, end); } } while(0)
 
 namespace {
+
+template <typename T>
+void releaseVector(std::vector<T>& values) {
+    std::vector<T>().swap(values);
+}
 
 // ============================================================================
 // Bounds on n: see INPUT_BOUNDS.md for the full analysis.
@@ -512,7 +518,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 compact[workIndex] = full[s1Q6Worklist[workIndex].compactIndex];
             }
             if (releaseFull)
-                full = {};
+                releaseVector(full);
         };
 
         compactQ6Bounds(q6PartialArgs, partialArgs, UseS2OuterQ6);
@@ -538,7 +544,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             }
         }
         if constexpr (UseS2OuterQ6)
-            partialArgs128 = {};
+            releaseVector(partialArgs128);
         compactQ6Bounds(q6PartialArgsDivU, partialArgsDivU, true);
         if constexpr (!UseCoherentQ6) {
             compactQ6Bounds(q6Kappa1, kappas, false);
@@ -553,7 +559,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 q6WorkIndexByCompact[s1Q6Worklist[workIndex].compactIndex]
                     = static_cast<UInt32>(workIndex + 1);
             }
-            hash2 = {};
+            releaseVector(hash2);
         }
     }
 
@@ -1036,8 +1042,8 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             }
         }
 
-        q6Bases = {};
-        q6Signs = {};
+        releaseVector(q6Bases);
+        releaseVector(q6Signs);
         END_PROFILE(t[9]);
     }
 
@@ -1241,26 +1247,26 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 #undef M16BITMAX
 #undef MFRAC
 
-    nusVec = {};
-    s2SplitCache = {};
-    chunks = {};
-    R = {};
-    M16 = {};
+    releaseVector(nusVec);
+    releaseVector(s2SplitCache);
+    releaseVector(chunks);
+    releaseVector(R);
+    releaseVector(M16);
     if constexpr (UseS1OuterQ6) {
-        partialArgs = {};
-        partialArgs128 = {};
-        kappas = {};
-        hash2 = {};
+        releaseVector(partialArgs);
+        releaseVector(partialArgs128);
+        releaseVector(kappas);
+        releaseVector(hash2);
     }
     if constexpr (UseS2OuterQ6) {
-        q6S2SplitCache = {};
-        s2Q6Nu3 = {};
-        s2Q6Nu6 = {};
-        q6WorkIndexByCompact = {};
+        releaseVector(q6S2SplitCache);
+        releaseVector(s2Q6Nu3);
+        releaseVector(s2Q6Nu6);
+        releaseVector(q6WorkIndexByCompact);
     }
     if constexpr (UseCoherentQ6) {
-        q6CommonNu = {};
-        q6BoundaryFactor = {};
+        releaseVector(q6CommonNu);
+        releaseVector(q6BoundaryFactor);
     }
 
     // Loop 2 only does S1 (S2 is done after Loop 0/1), so segments can be
