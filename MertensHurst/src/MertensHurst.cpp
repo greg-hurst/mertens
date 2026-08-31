@@ -190,9 +190,9 @@ UInt64 MertensComputer::isqrt_u128(const UInt128& a) {
     return x;
 }
 
-// nu_y = floor(c * sqrt(y)), c = 1.5 by default. Bigger c means more
+// nu_y = floor(c * sqrt(y)), c = 1.4 by default. Bigger c means more
 // work in S1 (cheap per-term: just an array lookup) and less in S2
-// (expensive: sums over M). 1.5 roughly balances sieve, S1, and S2.
+// (expensive: sums over M). 1.4 roughly balances sieve, S1, and S2.
 UInt64 MertensComputer::get_nu(const UInt128& x) {
     return static_cast<UInt64>(mNuRatio * static_cast<double>(isqrt_u128(x)));
 }
@@ -302,17 +302,14 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     constexpr UInt64 BF = SegmentedMobiusSieveCore::STENCIL_PERIOD;
     constexpr UInt64 min_B = BF * ((10000000ULL + BF - 1) / BF);
 
-    // Compute u: direct override, factor override, or default formula
+    // Compute u: direct override, factor override, or tuned default
     UInt64 u;
     if (uOverride > 0) {
         u = uOverride;
     } else {
-        double fac;
-        if (uFactor > 0.0) {
+        double fac = 0.75;
+        if (uFactor > 0.0)
             fac = uFactor;
-        } else {
-            fac = std::clamp(1.95 - 0.05 * std::log10((double)n), 0.75, 1.10);
-        }
         u = std::ceil(fac * std::pow(std::cbrt((double)n / std::log(std::log((double)n))), 2));
     }
 

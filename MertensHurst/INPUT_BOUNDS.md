@@ -10,7 +10,7 @@ The imposed bounds are $10^8 \le n \le 10^{25}$. The lower bound is discussed in
 
 **Source:** `MertensHurst.cpp`, `SegmentedMobiusSieve.h`
 
-The algorithm produces incorrect results for small $n$. The primary cause is structural: the minimum viable sieve segment size is `B == BF == STENCIL_PERIOD == 13860`, and the main sieve loop `while (L2 < nu_max)` only executes when the combined S2 and S1 ranges exceed one segment. Since `nu_max == 1.5*sqrt(n)` by default, the loop requires `B < nu_max`, which implies $n > (13860 / 1.5)^2 \approx 8.5 \times 10^7$.
+The algorithm produces incorrect results for small $n$. The primary cause is structural: the minimum viable sieve segment size is `B == BF == STENCIL_PERIOD == 13860`, and the main sieve loop `while (L2 < nu_max)` only executes when the combined S2 and S1 ranges exceed one segment. Since `nu_max == 1.4*sqrt(n)` by default, the loop requires `B < nu_max`, which implies $n > (13860 / 1.4)^2 = 9.801 \times 10^7$.
 
 More generally, if the split is changed to `nu_max = c*sqrt(n)`, then this structural threshold becomes roughly $(13860/c)^2$. Decreasing the split constant therefore raises the lower input bound, and the enforced $10^8$ lower limit should be revisited whenever this tuning is changed.
 
@@ -22,7 +22,7 @@ Additional reasons the algorithm is not designed for small $n$:
 
 - **The S2 mode-splitting assumes non-trivial sub-ranges.** The multi-mode S2 dispatch divides the summation range $[1, \nu]$ at boundaries like $\nu/6$, $\nu/3$, $\nu/2$. For small $n$, the per-argument `nus[i] == get_nu(n/i)` shrinks rapidly with `i`, and some mode sub-ranges may become empty. While empty ranges are handled gracefully, the algorithm has not been validated in this regime.
 
-- **Asymptotic tuning constants.** The `fac` formula, the `M16BITMAX` transition point, and the Loop 2 segment-size formula all embed constants calibrated for $10^8 \le n$. These constants are not wrong for smaller $n$, but they have not been verified to produce correct segment layouts or sieve coverage below $10^8$.
+- **Asymptotic tuning constants.** The default `fac`, the `M16BITMAX` transition point, and the Loop 2 segment-size formula all embed constants calibrated for $10^8 \le n$. These constants are not wrong for smaller $n$, but they have not been verified to produce correct segment layouts or sieve coverage below $10^8$.
 
 ---
 

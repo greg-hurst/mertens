@@ -64,8 +64,8 @@ static void printUsage(const char* prog) {
                  " (default: 12000000000, about 12 GB)" << std::endl;
     std::cerr << "  --u <value>          set the sieve truncation point directly" << std::endl;
     std::cerr << "  --u-factor <value>   set the u scaling factor"
-                 " (overrides default formula)" << std::endl;
-    std::cerr << "  --nu-ratio <value>   S1/S2 split ratio (default: 1.5)" << std::endl;
+                 " (default: 0.75)" << std::endl;
+    std::cerr << "  --nu-ratio <value>   S1/S2 split ratio (default: 1.4)" << std::endl;
     std::cerr << std::endl;
     std::cerr << "  --u and --u-factor are mutually exclusive." << std::endl;
     std::cerr << "  Bounds: 0 < u < n. u-factor > 0. nu-ratio > 0. Hard caps on u are enforced per build (see INPUT_BOUNDS.md)." << std::endl;
@@ -81,7 +81,7 @@ int main(int argc, char* argv[]) {
     UInt64 segmentCap = 12000000000ULL;
     UInt64 uOverride = 0;
     double uFactor = 0.0;
-    double nuRatio = 1.5;
+    double nuRatio = 1.4;
     const char* nstr = nullptr;
 
     for (int i = 1; i < argc; ++i) {

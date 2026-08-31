@@ -24,9 +24,10 @@
 //
 // uFactor:    override the scaling factor in the u formula (0.0 = use default).
 //              u = ceil(uFactor * (n / log(log(n)))^{2/3}).
+//              Default 0.75.
 //              Mutually exclusive with uOverride.
 //
 // nuRatio:    S1/S2 split ratio. get_nu(x) = floor(nuRatio * sqrt(x)).
-//              Default 1.5. Must be > 0. Affects performance, not correctness.
+//              Default 1.4. Must be > 0. Affects performance, not correctness.
 Int64 MertensHurst(UInt128 n, bool profile = false, UInt64 segmentCap = 12000000000ULL,
-                   UInt64 uOverride = 0, double uFactor = 0.0, double nuRatio = 1.5);
+                   UInt64 uOverride = 0, double uFactor = 0.0, double nuRatio = 1.4);
