@@ -79,6 +79,20 @@ static_assert(MERTENSHURST_Q6_ZERO_COMPLETION == 0
 static_assert(!UseQ6ZeroCompletion || (UseCoherentQ6 && !UseFullRecovery),
               "Q6 zero completion requires final-value coherent Q6");
 
+// Completed groups have no auxiliary partial-value interpretation. The
+// optimized profile stores only their hot accumulators in worklist order.
+#ifndef MERTENSHURST_Q6_COMPACT_HOT_STATE
+#define MERTENSHURST_Q6_COMPACT_HOT_STATE 0
+#endif
+static constexpr bool UseQ6CompactHotState =
+    MERTENSHURST_Q6_COMPACT_HOT_STATE;
+static_assert(MERTENSHURST_Q6_COMPACT_HOT_STATE == 0
+              || MERTENSHURST_Q6_COMPACT_HOT_STATE == 1,
+              "MERTENSHURST_Q6_COMPACT_HOT_STATE must be 0 or 1");
+static_assert(!UseQ6CompactHotState
+              || (UseQ6ZeroCompletion && UseUnorderedS2),
+              "compact Q6 state requires zero completion and unordered S2");
+
 #ifndef MERTENSHURST_VALIDATE_UNORDERED_S2
 #define MERTENSHURST_VALIDATE_UNORDERED_S2 0
 #endif
@@ -442,6 +456,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     UInt32 compactHalf = 0;
     bool useQ6ZeroCompletion = UseQ6ZeroCompletion;
     bool q6ZeroCompletionFallback = false;
+    bool useQ6CompactHotState = false;
     if constexpr (UseS1OuterQ6) {
         s1Q6Worklist = buildS1Q6Worklist(
             hash2.data(), static_cast<UInt32>(mx), nu
@@ -459,6 +474,8 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 }
             }
         }
+        if constexpr (UseQ6CompactHotState)
+            useQ6CompactHotState = useQ6ZeroCompletion;
         if constexpr (!UseCoherentQ6) {
             s1Q6Kappa3.resize(s1Q6Worklist.size());
             s1Q6Kappa6.resize(s1Q6Worklist.size());
@@ -582,14 +599,20 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         if constexpr (UseS2OuterQ6) {
             if constexpr (!UseCoherentQ6)
                 compactQ6Bounds(q6S2SplitCache, s2SplitCache, true);
-            q6WorkIndexByCompact.assign(mx + 1, 0);
-            #pragma omp parallel for schedule(static) if(s1Q6Worklist.size() >= 1000000)
-            for (UInt64 workIndex = 0; workIndex < s1Q6Worklist.size(); ++workIndex) {
-                q6WorkIndexByCompact[s1Q6Worklist[workIndex].compactIndex]
-                    = static_cast<UInt32>(workIndex + 1);
+            if (!useQ6CompactHotState) {
+                q6WorkIndexByCompact.assign(mx + 1, 0);
+                #pragma omp parallel for schedule(static) if(s1Q6Worklist.size() >= 1000000)
+                for (UInt64 workIndex = 0;
+                     workIndex < s1Q6Worklist.size();
+                     ++workIndex) {
+                    q6WorkIndexByCompact[s1Q6Worklist[workIndex].compactIndex]
+                        = static_cast<UInt32>(workIndex + 1);
+                }
             }
             releaseVector(hash2);
         }
+        if (useQ6CompactHotState)
+            releaseVector(negativeRecoverySigns);
     }
 
     // Exact stored-state invariant. For square-free j, let
@@ -632,11 +655,20 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     // completion starts them at zero. The boundary term is added incrementally
     // below, and the S1/S2 terms are subtracted by their hot loops. The cnt128
     // largest x/j use 128-bit accumulators.
-    const Int64 partialInitialValue = useQ6ZeroCompletion ? 0 : 1;
-    std::vector<Int64> partialValues(mx+1, partialInitialValue);
-    std::vector<Int128> partialValues128(cnt128+1, partialInitialValue);
-    partialValues[0] = 0;
-    partialValues128[0] = 0;
+    std::vector<Int64> partialValues;
+    std::vector<Int128> partialValues128;
+    std::vector<Int64> q6CompactValues;
+    std::vector<Int128> q6CompactValues128;
+    if (useQ6CompactHotState) {
+        q6CompactValues.resize(s1Q6Worklist.size() - q6WideCount, 0);
+        q6CompactValues128.resize(q6WideCount, 0);
+    } else {
+        const Int64 initialValue = useQ6ZeroCompletion ? 0 : 1;
+        partialValues.assign(mx + 1, initialValue);
+        partialValues128.assign(cnt128 + 1, initialValue);
+        partialValues[0] = 0;
+        partialValues128[0] = 0;
+    }
 
     // initialize the primes used in SegmentedMertensSieveCore
     primes = sievePrimesUpToSqrt(u);
@@ -713,12 +745,16 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 if (__builtin_expect(index > cnt128, true)) {
                     if constexpr (UseCoherentQ6) {
                         if (useQ6ZeroCompletion) {
-                            partialValues[index] -= evaluateCompletedS1OuterQ6(
+                            const Int64 value = evaluateCompletedS1OuterQ6(
                                 q6PartialArgs[workIndex],
                                 q6PartialArgsDivU[workIndex],
                                 q6CommonKappa[workIndex], segmentLo, segmentHi,
                                 mertensCoarse, residual, qCache, dCAP
                             );
+                            if (useQ6CompactHotState)
+                                q6CompactValues[workIndex - q6WideCount] -= value;
+                            else
+                                partialValues[index] -= value;
                         } else {
                             partialValues[index] -= evaluateCoherentS1OuterQ6(
                                 item.mode, q6PartialArgs[workIndex],
@@ -740,12 +776,16 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 } else {
                     if constexpr (UseCoherentQ6) {
                         if (useQ6ZeroCompletion) {
-                            partialValues128[index] -= evaluateCompletedS1OuterQ6(
+                            const Int128 value = evaluateCompletedS1OuterQ6(
                                 q6PartialArgs128[workIndex],
                                 q6PartialArgsDivU[workIndex],
                                 q6CommonKappa[workIndex], segmentLo, segmentHi,
                                 mertensCoarse, residual, qCache, dCAP
                             );
+                            if (useQ6CompactHotState)
+                                q6CompactValues128[workIndex] -= value;
+                            else
+                                partialValues128[index] -= value;
                         } else {
                             partialValues128[index] -= evaluateCoherentS1OuterQ6(
                                 item.mode, q6PartialArgs128[workIndex],
@@ -1105,7 +1145,8 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         }
 
         releaseVector(q6Bases);
-        releaseVector(q6Signs);
+        if (!useQ6CompactHotState)
+            releaseVector(q6Signs);
         END_PROFILE(t[9]);
     }
 
@@ -1165,6 +1206,22 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                                    nusVec[index], s2SplitCache[index]);
     };
 
+    auto applyCompactS2_64 = [&](UInt32 workIndex, UInt64 lo,
+                                  UInt64 hi) -> Int64 {
+        return update_S2_coherent_q6(
+            q6PartialArgs[workIndex], L1, lo, hi, MuP,
+            0, q6CommonNu[workIndex], qCache, dCAP
+        );
+    };
+
+    auto applyCompactS2_128 = [&](UInt32 workIndex, UInt64 lo,
+                                   UInt64 hi) -> Int128 {
+        return update_S2_coherent_q6_128(
+            q6PartialArgs128[workIndex], L1, lo, hi, MuP,
+            0, q6CommonNu[workIndex]
+        );
+    };
+
     // ========================================================================
     // Loop 0/1 iteration lambda
     // ========================================================================
@@ -1187,7 +1244,77 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             const UInt64 s2SegmentLo = UseUnorderedS2
                 ? std::max(L1, nu + 1)
                 : L1;
-            if (s2SegmentLo <= L2) {
+            if (useQ6CompactHotState) {
+                UInt64 activeEnd = 0;
+                UInt64 chunkedEnd = 0;
+                if (s2SegmentLo <= L2) {
+                    activeEnd = static_cast<UInt64>(std::partition_point(
+                        q6CommonNu.begin(), q6CommonNu.end(),
+                        [=](UInt64 split) { return split >= s2SegmentLo; }
+                    ) - q6CommonNu.begin());
+                    chunkedEnd = static_cast<UInt64>(std::partition_point(
+                        q6CommonNu.begin(),
+                        q6CommonNu.begin()
+                            + static_cast<std::ptrdiff_t>(activeEnd),
+                        [=](UInt64 split) { return split > CHUNK_LEN; }
+                    ) - q6CommonNu.begin());
+
+                    for (UInt64 workIndex = 0;
+                         workIndex < chunkedEnd;
+                         ++workIndex) {
+                        const UInt64 rowEnd = std::min(
+                            L2, q6CommonNu[workIndex]
+                        );
+                        for (UInt64 lo = s2SegmentLo;
+                             lo <= rowEnd;
+                             lo += CHUNK_LEN) {
+                            chunks.push_back(Chunk{
+                                static_cast<UInt32>(workIndex), lo,
+                                std::min(lo + CHUNK_LEN - 1, rowEnd)
+                            });
+                        }
+                    }
+                }
+
+                #pragma omp parallel for schedule(dynamic, 1)
+                for (std::size_t tt = 0; tt < chunks.size(); ++tt) {
+                    const Chunk& chunk = chunks[tt];
+                    const UInt32 workIndex = chunk.i;
+                    if (workIndex < q6WideCount) {
+                        const Int128 value = applyCompactS2_128(
+                            workIndex, chunk.a, chunk.b
+                        );
+                        #pragma omp critical
+                        q6CompactValues128[workIndex] -= value;
+                    } else {
+                        const Int64 value = applyCompactS2_64(
+                            workIndex, chunk.a, chunk.b
+                        );
+                        #pragma omp atomic
+                        q6CompactValues[workIndex - q6WideCount] -= value;
+                    }
+                }
+
+                #pragma omp parallel for schedule(dynamic, 1)
+                for (UInt64 workIndex = chunkedEnd;
+                     workIndex < activeEnd;
+                     ++workIndex) {
+                    const UInt64 rowEnd = std::min(
+                        L2, q6CommonNu[workIndex]
+                    );
+                    if (workIndex < q6WideCount) {
+                        q6CompactValues128[workIndex] -= applyCompactS2_128(
+                            static_cast<UInt32>(workIndex), s2SegmentLo, rowEnd
+                        );
+                    } else {
+                        q6CompactValues[workIndex - q6WideCount]
+                            -= applyCompactS2_64(
+                                static_cast<UInt32>(workIndex),
+                                s2SegmentLo, rowEnd
+                            );
+                    }
+                }
+            } else if (s2SegmentLo <= L2) {
                 for (UInt32 i = 1; i <= (UInt32)mx0; ++i) {
                     if (isS2Active(i)) {
                         const UInt64 m = std::min(L2, nusVec[i]);
@@ -1264,7 +1391,18 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                     const Int64 mval = static_cast<Int64>(GET_M(
                         _MP, RP, L1, q6CommonNu[workIndex]
                     ));
-                    if (__builtin_expect(index > cnt128, true)) {
+                    if (useQ6CompactHotState) {
+                        if (workIndex < q6WideCount) {
+                            q6CompactValues128[workIndex] += Int128(
+                                q6BoundaryFactor[workIndex]
+                            ) * Int128(mval);
+                        } else {
+                            q6CompactValues[workIndex - q6WideCount]
+                                += static_cast<Int64>(
+                                    q6BoundaryFactor[workIndex]
+                                ) * mval;
+                        }
+                    } else if (__builtin_expect(index > cnt128, true)) {
                         partialValues[index] += static_cast<Int64>(
                             q6BoundaryFactor[workIndex]
                         ) * mval;
@@ -1374,7 +1512,16 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     // ========================================================================
 
 #ifndef NDEBUG
-    if (useQ6ZeroCompletion) {
+    if (useQ6CompactHotState) {
+        assert(q6CompactValues128.size() == q6WideCount);
+        assert(q6CompactValues.size()
+               == s1Q6Worklist.size() - q6WideCount);
+        assert(q6Signs.size() == s1Q6Worklist.size());
+        assert(partialValues.empty());
+        assert(partialValues128.empty());
+        assert(negativeRecoverySigns.empty());
+        assert(q6WorkIndexByCompact.empty());
+    } else if (useQ6ZeroCompletion) {
         std::size_t hotPosition = 0;
         for (UInt32 index = 1; index <= static_cast<UInt32>(mx); ++index) {
             if (hotPosition < s1Q6Worklist.size()
@@ -1393,10 +1540,29 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 
     Int64 result;
     if constexpr (!UseFullRecovery) {
-        Int128 recovered = recoverSquarefreeFinalValue(
-            partialValues, partialValues128, cnt128, negativeRecoverySigns,
-            static_cast<UInt32>(mx)
-        );
+        Int128 recovered = 0;
+        if (useQ6CompactHotState) {
+            for (UInt64 workIndex = 0;
+                 workIndex < q6WideCount;
+                 ++workIndex) {
+                recovered += q6Signs[workIndex] < 0
+                    ? -q6CompactValues128[workIndex]
+                    : q6CompactValues128[workIndex];
+            }
+            for (UInt64 workIndex = q6WideCount;
+                 workIndex < s1Q6Worklist.size();
+                 ++workIndex) {
+                const Int128 value = Int128(
+                    q6CompactValues[workIndex - q6WideCount]
+                );
+                recovered += q6Signs[workIndex] < 0 ? -value : value;
+            }
+        } else {
+            recovered = recoverSquarefreeFinalValue(
+                partialValues, partialValues128, cnt128, negativeRecoverySigns,
+                static_cast<UInt32>(mx)
+            );
+        }
         if constexpr (UseUnorderedS2)
             recovered -= unorderedS2Square;
 #ifndef NDEBUG
@@ -1435,6 +1601,11 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             if (q6ZeroCompletionFallback)
                 std::cout << "  fallback reason: common split reached y/6"
                           << std::endl;
+        }
+        if constexpr (UseQ6CompactHotState) {
+            std::cout << "Q6 compact hot state: "
+                      << (useQ6CompactHotState ? "active" : "retained fallback")
+                      << std::endl;
         }
         std::cout << std::endl;
         if (t[0] + t[1] + t[2] > 0.0) {

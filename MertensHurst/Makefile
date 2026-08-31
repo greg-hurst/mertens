@@ -38,6 +38,7 @@ FULL_RECOVERY ?= 0
 S1_OUTER_Q6 ?= 1
 S2_OUTER_Q6 ?= 1
 Q6_ZERO_COMPLETION ?= 0
+Q6_COMPACT_HOT_STATE ?= 0
 
 # --- Base flags (all platforms) ---
 CXXFLAGS := -O3 -std=c++17 \
@@ -53,16 +54,19 @@ CXXFLAGS := -O3 -std=c++17 \
             -DMERTENSHURST_FULL_RECOVERY=$(FULL_RECOVERY) \
             -DMERTENSHURST_S1_OUTER_Q6=$(S1_OUTER_Q6) \
             -DMERTENSHURST_S2_OUTER_Q6=$(S2_OUTER_Q6) \
-            -DMERTENSHURST_Q6_ZERO_COMPLETION=$(Q6_ZERO_COMPLETION)
+            -DMERTENSHURST_Q6_ZERO_COMPLETION=$(Q6_ZERO_COMPLETION) \
+            -DMERTENSHURST_Q6_COMPACT_HOT_STATE=$(Q6_COMPACT_HOT_STATE)
 
 # Extra defines, e.g. make EXTRA_CXXFLAGS="-DSIEVE_LP_SIZE=1024 -DSIEVE_STRIDE_LOG=7"
 CXXFLAGS += $(EXTRA_CXXFLAGS)
 Q2_CXXFLAGS = $(filter-out -DMERTENSHURST_S1_OUTER_Q6=% \
                             -DMERTENSHURST_S2_OUTER_Q6=% \
-                            -DMERTENSHURST_Q6_ZERO_COMPLETION=%,$(CXXFLAGS)) \
+                            -DMERTENSHURST_Q6_ZERO_COMPLETION=% \
+                            -DMERTENSHURST_Q6_COMPACT_HOT_STATE=%,$(CXXFLAGS)) \
               -DMERTENSHURST_S1_OUTER_Q6=0 \
               -DMERTENSHURST_S2_OUTER_Q6=0 \
-              -DMERTENSHURST_Q6_ZERO_COMPLETION=0
+              -DMERTENSHURST_Q6_ZERO_COMPLETION=0 \
+              -DMERTENSHURST_Q6_COMPACT_HOT_STATE=0
 UNORDERED_S2_CXXFLAGS = $(filter-out \
               -DMERTENSHURST_FULL_RECOVERY=% \
               -DMERTENSHURST_S1_OUTER_Q6=% \
@@ -72,7 +76,8 @@ UNORDERED_S2_CXXFLAGS = $(filter-out \
               -DMERTENSHURST_UNORDERED_S2=% \
               -DMERTENSHURST_VALIDATE_UNORDERED_S2=% \
               -DMERTENSHURST_VALIDATE_UNORDERED_S2_WIDE=% \
-              -DMERTENSHURST_Q6_ZERO_COMPLETION=%,$(CXXFLAGS)) \
+              -DMERTENSHURST_Q6_ZERO_COMPLETION=% \
+              -DMERTENSHURST_Q6_COMPACT_HOT_STATE=%,$(CXXFLAGS)) \
               -DMERTENSHURST_FULL_RECOVERY=0 \
               -DMERTENSHURST_S1_OUTER_Q6=1 \
               -DMERTENSHURST_S2_OUTER_Q6=1 \
@@ -81,10 +86,19 @@ UNORDERED_S2_CXXFLAGS = $(filter-out \
               -DMERTENSHURST_UNORDERED_S2=1 \
               -DMERTENSHURST_VALIDATE_UNORDERED_S2=0 \
               -DMERTENSHURST_VALIDATE_UNORDERED_S2_WIDE=0 \
-              -DMERTENSHURST_Q6_ZERO_COMPLETION=0
+              -DMERTENSHURST_Q6_ZERO_COMPLETION=0 \
+              -DMERTENSHURST_Q6_COMPACT_HOT_STATE=0
 ZERO_COMPLETE_CXXFLAGS = $(filter-out \
               -DMERTENSHURST_Q6_ZERO_COMPLETION=%,$(UNORDERED_S2_CXXFLAGS)) \
               -DMERTENSHURST_Q6_ZERO_COMPLETION=1
+OPTIMIZED_CXXFLAGS = $(filter-out \
+              -DMERTENSHURST_Q6_COMPACT_HOT_STATE=%,$(ZERO_COMPLETE_CXXFLAGS)) \
+              -DMERTENSHURST_Q6_COMPACT_HOT_STATE=1
+OPTIMIZED_VALIDATE_CXXFLAGS = $(filter-out \
+              -DMERTENSHURST_VALIDATE_UNORDERED_S2=% \
+              -DMERTENSHURST_VALIDATE_UNORDERED_S2_WIDE=%,$(OPTIMIZED_CXXFLAGS)) \
+              -DMERTENSHURST_VALIDATE_UNORDERED_S2=1 \
+              -DMERTENSHURST_VALIDATE_UNORDERED_S2_WIDE=1
 LDFLAGS  :=
 
 # --- Platform-specific: OpenMP ---
@@ -102,7 +116,7 @@ BUILDDIR = build
 SIEVEDIR = ../sieve
 SRCS     = $(SRCDIR)/MertensHurst.cpp $(SIEVEDIR)/SegmentedMobiusSieve.cpp $(SRCDIR)/main.cpp
 
-.PHONY: all q2 s2-unordered q6-zero-complete clean
+.PHONY: all q2 s2-unordered q6-zero-complete optimized optimized-validate clean
 
 all: $(BUILDDIR)/mertens
 
@@ -111,6 +125,10 @@ q2: $(BUILDDIR)/mertens_q2
 s2-unordered: $(BUILDDIR)/mertens_s2_unordered
 
 q6-zero-complete: $(BUILDDIR)/mertens_q6_zero_complete
+
+optimized: $(BUILDDIR)/mertens_optimized
+
+optimized-validate: $(BUILDDIR)/mertens_optimized_validate
 
 $(BUILDDIR)/mertens: $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
 	@mkdir -p $(BUILDDIR)
@@ -127,6 +145,14 @@ $(BUILDDIR)/mertens_s2_unordered: $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $
 $(BUILDDIR)/mertens_q6_zero_complete: $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
 	@mkdir -p $(BUILDDIR)
 	$(CXX) $(ZERO_COMPLETE_CXXFLAGS) $(SRCS) -o $@ $(LDFLAGS)
+
+$(BUILDDIR)/mertens_optimized: $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
+	@mkdir -p $(BUILDDIR)
+	$(CXX) $(OPTIMIZED_CXXFLAGS) $(SRCS) -o $@ $(LDFLAGS)
+
+$(BUILDDIR)/mertens_optimized_validate: $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
+	@mkdir -p $(BUILDDIR)
+	$(CXX) $(OPTIMIZED_VALIDATE_CXXFLAGS) $(SRCS) -o $@ $(LDFLAGS)
 
 clean:
 	rm -rf $(BUILDDIR)
