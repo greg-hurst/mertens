@@ -829,7 +829,9 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             const UInt32 reverseActive = countBasesAtMost(reverseNu, bi);
             const UInt32 rowEnd = std::max(forwardActive, reverseActive);
 
-            Int128 diagonal = 0;
+            const bool wide = bi < unorderedWideCount;
+            Int128 wideDiagonal = 0;
+            Int64 narrowDiagonal = 0;
             const std::size_t diagonalInner = CoherentS2Q6::innerClass(
                 b, reverseNu
             );
@@ -837,25 +839,22 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 const std::size_t diagonalMode = CoherentS2Q6::modeIndex(
                     q6OuterClass(bi), diagonalInner
                 );
-                if (bi < unorderedWideCount) {
+                if (wide) {
                     const Int128 quotient = static_cast<Int128>(
                         q6PartialArgs128[bi] / b
                     );
-                    diagonal = CoherentS2Q6::evaluatePeriodKernelValue(
+                    wideDiagonal = CoherentS2Q6::evaluatePeriodKernelValue(
                         CoherentS2Q6::PeriodTable[diagonalMode], quotient
                     );
                 } else {
-                    const Int64 quotient = static_cast<Int64>(
-                        q6PartialArgs[bi] / b
-                    );
-                    diagonal = Int128(
-                        CoherentS2Q6::evaluatePeriodKernelValue(
-                            CoherentS2Q6::PeriodTable[diagonalMode], quotient
-                        )
+                    const UInt64 quotient = q6PartialArgs[bi] / b;
+                    narrowDiagonal = CoherentS2Q6::evaluatePeriodKernel(
+                        CoherentS2Q6::PeriodTable[diagonalMode], quotient
                     );
                 }
             }
-            if (rowEnd == 0) return diagonal;
+            if (rowEnd == 0)
+                return wide ? wideDiagonal : Int128(narrowDiagonal);
 
             std::array<UInt32, 14> endpoints{};
             std::size_t endpointCount = 0;
@@ -884,7 +883,8 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 endpoints.begin(), endpoints.begin() + endpointCount
             ) - endpoints.begin());
 
-            Int128 offDiagonal = 0;
+            Int128 wideOffDiagonal = 0;
+            Int64 narrowOffDiagonal = 0;
             for (std::size_t cell = 1; cell < endpointCount; ++cell) {
                 const UInt32 cellBegin = endpoints[cell - 1];
                 const UInt32 cellEnd = endpoints[cell];
@@ -923,7 +923,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                         forward ? forwardMode : reverseMode
                     ];
 
-                if (bi < unorderedWideCount) {
+                if (wide) {
                     const UInt128 numerator = q6PartialArgs128[bi];
                     for (UInt32 ai = cellBegin; ai < cellEnd; ++ai) {
                         const Int128 quotient = static_cast<Int128>(
@@ -933,22 +933,20 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                             CoherentS2Q6::evaluatePeriodKernelValue(
                                 kernel, quotient
                             );
-                        offDiagonal += q6Signs[ai] < 0 ? -value : value;
+                        wideOffDiagonal += q6Signs[ai] < 0 ? -value : value;
                     }
                 } else {
                     const UInt64 numerator = q6PartialArgs[bi];
                     auto accumulateCell = [&](auto&& quotientAt) {
                         for (UInt32 ai = cellBegin; ai < cellEnd; ++ai) {
-                            const Int64 quotient = static_cast<Int64>(
-                                quotientAt(q6Bases[ai])
-                            );
+                            const UInt64 quotient = quotientAt(q6Bases[ai]);
                             const Int64 value =
-                                CoherentS2Q6::evaluatePeriodKernelValue(
+                                CoherentS2Q6::evaluatePeriodKernel(
                                     kernel, quotient
                                 );
-                            offDiagonal += q6Signs[ai] < 0
-                                ? -Int128(value)
-                                : Int128(value);
+                            narrowOffDiagonal += q6Signs[ai] < 0
+                                ? -value
+                                : value;
                         }
                     };
 
@@ -970,9 +968,15 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 }
             }
 
-            return diagonal + (q6Signs[bi] < 0
-                ? -offDiagonal
-                : offDiagonal);
+            if (wide) {
+                return wideDiagonal + (q6Signs[bi] < 0
+                    ? -wideOffDiagonal
+                    : wideOffDiagonal);
+            }
+            const Int128 narrowOffDiagonal128 = Int128(narrowOffDiagonal);
+            return Int128(narrowDiagonal) + (q6Signs[bi] < 0
+                ? -narrowOffDiagonal128
+                : narrowOffDiagonal128);
         };
 
         std::vector<Int128> threadTotals(omp_get_max_threads(), Int128(0));
