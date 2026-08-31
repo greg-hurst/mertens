@@ -400,6 +400,30 @@ static inline S1Q6Detail::Accumulator<TArg> evaluateCoherentS1OuterQ6(
     return 0;
 }
 
+// A completed outer group always has the full {1,2,3,6} divisor set. With a
+// common split, its S1 coefficients are therefore just the two residue
+// classes coprime to 6 over one shared interval.
+template<typename TArg, typename MIntT>
+static inline S1Q6Detail::Accumulator<TArg> evaluateCompletedS1OuterQ6(
+    const TArg& y,
+    UInt64 lowerExclusive,
+    UInt64 commonKappa,
+    UInt64 L1,
+    UInt64 L2,
+    const MIntT* __restrict M,
+    const Int8* __restrict R,
+    const QuotientCache& qCache,
+    UInt64 dCAP
+) {
+    using namespace S1Q6Detail;
+
+    if (lowerExclusive == ~UInt64(0)) return 0;
+    return sumClippedStream<MASK_COPRIME6>(
+        y, L1, L2, lowerExclusive + 1, commonKappa,
+        M, R, qCache, dCAP
+    );
+}
+
 template<typename TArg, typename MIntT>
 static inline S1Q6Detail::Accumulator<TArg> evaluateS1OuterQ6(
     S1OuterQ6Mode mode,

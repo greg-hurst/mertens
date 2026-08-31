@@ -65,6 +65,20 @@ static_assert(!UseUnorderedS2 || (UseCoherentQ6
                                   && !UseFullRecovery),
               "unordered S2 requires final-value coherent period-36 Q=6");
 
+// Completing missing outer-Q6 members adds only scalar zeros when the common
+// split remains below y/6. If any hot group misses that guard, the invocation
+// falls back as a whole to the retained truncated coherent invariant.
+#ifndef MERTENSHURST_Q6_ZERO_COMPLETION
+#define MERTENSHURST_Q6_ZERO_COMPLETION 0
+#endif
+static constexpr bool UseQ6ZeroCompletion =
+    MERTENSHURST_Q6_ZERO_COMPLETION;
+static_assert(MERTENSHURST_Q6_ZERO_COMPLETION == 0
+              || MERTENSHURST_Q6_ZERO_COMPLETION == 1,
+              "MERTENSHURST_Q6_ZERO_COMPLETION must be 0 or 1");
+static_assert(!UseQ6ZeroCompletion || (UseCoherentQ6 && !UseFullRecovery),
+              "Q6 zero completion requires final-value coherent Q6");
+
 #ifndef MERTENSHURST_VALIDATE_UNORDERED_S2
 #define MERTENSHURST_VALIDATE_UNORDERED_S2 0
 #endif
@@ -426,10 +440,25 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     std::vector<UInt32> q6WorkIndexByCompact;
     UInt64 q6WideCount = 0;
     UInt32 compactHalf = 0;
+    bool useQ6ZeroCompletion = UseQ6ZeroCompletion;
+    bool q6ZeroCompletionFallback = false;
     if constexpr (UseS1OuterQ6) {
         s1Q6Worklist = buildS1Q6Worklist(
             hash2.data(), static_cast<UInt32>(mx), nu
         );
+        if constexpr (UseQ6ZeroCompletion) {
+            for (const S1Q6WorkItem& item : s1Q6Worklist) {
+                const UInt32 index = item.compactIndex;
+                const UInt128 y = index <= cnt128
+                    ? partialArgs128[index]
+                    : UInt128(partialArgs[index]);
+                if (UInt128(nusVec[index]) >= y / 6) {
+                    useQ6ZeroCompletion = false;
+                    q6ZeroCompletionFallback = true;
+                    break;
+                }
+            }
+        }
         if constexpr (!UseCoherentQ6) {
             s1Q6Kappa3.resize(s1Q6Worklist.size());
             s1Q6Kappa6.resize(s1Q6Worklist.size());
@@ -462,7 +491,10 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 q6CommonNu[workIndex] = commonNu;
                 q6CommonKappa[workIndex] = commonKappa;
                 q6BoundaryFactor[workIndex] = coherentS1BoundaryFactor(
-                    s1Q6Worklist[workIndex].mode, commonKappa
+                    useQ6ZeroCompletion
+                        ? S1OuterQ6Mode::Full6
+                        : s1Q6Worklist[workIndex].mode,
+                    commonKappa
                 );
             }
             if constexpr (!UseCoherentQ6) {
@@ -585,17 +617,24 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     // sees the exact grouped boundary term. This representation is purposely
     // incompatible with full per-slot back substitution.
     //
+    // Zero completion extends every hot group to the full divisor set. Its
+    // four scalar constants cancel, so every slot starts at zero, auxiliary
+    // slots stay zero, and signed recovery sees only the completed hot groups.
+    // A failed completion guard restores the entire retained invariant above.
+    //
     // The natural paths retain A_j in every square-free slot, including the
     // auxiliary slots divisible by 2 or 3, and therefore also permit complete
     // back substitution. All paths retain the leading constant in those slots;
     // the coherent grouped correction is closed only under signed final-value
     // recovery as stated above.
     //
-    // partialValues starts with the leading 1 in A_j. The kappa term is added
-    // incrementally below; the S1/S2 transformed terms are subtracted by their
-    // respective hot loops. The cnt128 largest x/j use 128-bit accumulators.
-    std::vector<Int64> partialValues(mx+1, 1);
-    std::vector<Int128> partialValues128(cnt128+1, 1);
+    // The retained paths start partialValues with the leading 1 in A_j; zero
+    // completion starts them at zero. The boundary term is added incrementally
+    // below, and the S1/S2 terms are subtracted by their hot loops. The cnt128
+    // largest x/j use 128-bit accumulators.
+    const Int64 partialInitialValue = useQ6ZeroCompletion ? 0 : 1;
+    std::vector<Int64> partialValues(mx+1, partialInitialValue);
+    std::vector<Int128> partialValues128(cnt128+1, partialInitialValue);
     partialValues[0] = 0;
     partialValues128[0] = 0;
 
@@ -673,12 +712,21 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 const UInt32 index = item.compactIndex;
                 if (__builtin_expect(index > cnt128, true)) {
                     if constexpr (UseCoherentQ6) {
-                        partialValues[index] -= evaluateCoherentS1OuterQ6(
-                            item.mode, q6PartialArgs[workIndex],
-                            q6PartialArgsDivU[workIndex], q6CommonKappa[workIndex],
-                            segmentLo, segmentHi, mertensCoarse, residual,
-                            qCache, dCAP
-                        );
+                        if (useQ6ZeroCompletion) {
+                            partialValues[index] -= evaluateCompletedS1OuterQ6(
+                                q6PartialArgs[workIndex],
+                                q6PartialArgsDivU[workIndex],
+                                q6CommonKappa[workIndex], segmentLo, segmentHi,
+                                mertensCoarse, residual, qCache, dCAP
+                            );
+                        } else {
+                            partialValues[index] -= evaluateCoherentS1OuterQ6(
+                                item.mode, q6PartialArgs[workIndex],
+                                q6PartialArgsDivU[workIndex],
+                                q6CommonKappa[workIndex], segmentLo, segmentHi,
+                                mertensCoarse, residual, qCache, dCAP
+                            );
+                        }
                     } else {
                         partialValues[index] -= evaluateS1OuterQ6(
                             item.mode, q6PartialArgs[workIndex],
@@ -691,12 +739,21 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                     }
                 } else {
                     if constexpr (UseCoherentQ6) {
-                        partialValues128[index] -= evaluateCoherentS1OuterQ6(
-                            item.mode, q6PartialArgs128[workIndex],
-                            q6PartialArgsDivU[workIndex], q6CommonKappa[workIndex],
-                            segmentLo, segmentHi, mertensCoarse, residual,
-                            qCache, dCAP
-                        );
+                        if (useQ6ZeroCompletion) {
+                            partialValues128[index] -= evaluateCompletedS1OuterQ6(
+                                q6PartialArgs128[workIndex],
+                                q6PartialArgsDivU[workIndex],
+                                q6CommonKappa[workIndex], segmentLo, segmentHi,
+                                mertensCoarse, residual, qCache, dCAP
+                            );
+                        } else {
+                            partialValues128[index] -= evaluateCoherentS1OuterQ6(
+                                item.mode, q6PartialArgs128[workIndex],
+                                q6PartialArgsDivU[workIndex],
+                                q6CommonKappa[workIndex], segmentLo, segmentHi,
+                                mertensCoarse, residual, qCache, dCAP
+                            );
+                        }
                     } else {
                         partialValues128[index] -= evaluateS1OuterQ6(
                             item.mode, q6PartialArgs128[workIndex],
@@ -756,6 +813,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     };
 
     auto q6OuterClass = [&](UInt32 workIndex) -> UInt32 {
+        if (useQ6ZeroCompletion) return 0;
         switch (s1Q6Worklist[workIndex].mode) {
             case S1OuterQ6Mode::Full6:         return 0;
             case S1OuterQ6Mode::Minus2Minus3: return 1;
@@ -869,9 +927,11 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             addEndpoint(countBasesAtMost(reverseNu / 3, bi));
             addEndpoint(countBasesAtMost(reverseNu / 2, bi));
             addEndpoint(reverseActive);
-            addEndpoint(outerClassCutoffs[0]);
-            addEndpoint(outerClassCutoffs[1]);
-            addEndpoint(outerClassCutoffs[2]);
+            if (!useQ6ZeroCompletion) {
+                addEndpoint(outerClassCutoffs[0]);
+                addEndpoint(outerClassCutoffs[1]);
+                addEndpoint(outerClassCutoffs[2]);
+            }
             if constexpr (UseDivisionFree)
                 addEndpoint(cacheCutoff);
 
@@ -1313,6 +1373,24 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     // build retains decreasing-i back substitution of every W_i.
     // ========================================================================
 
+#ifndef NDEBUG
+    if (useQ6ZeroCompletion) {
+        std::size_t hotPosition = 0;
+        for (UInt32 index = 1; index <= static_cast<UInt32>(mx); ++index) {
+            if (hotPosition < s1Q6Worklist.size()
+                && s1Q6Worklist[hotPosition].compactIndex == index) {
+                ++hotPosition;
+                continue;
+            }
+            const Int128 value = index <= cnt128
+                ? partialValues128[index]
+                : Int128(partialValues[index]);
+            assert(value == 0);
+        }
+        assert(hotPosition == s1Q6Worklist.size());
+    }
+#endif
+
     Int64 result;
     if constexpr (!UseFullRecovery) {
         Int128 recovered = recoverSquarefreeFinalValue(
@@ -1350,6 +1428,14 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         std::cout << "-------------- Parameters -------------------" << std::endl;
         std::cout << "              u: " << u << std::endl;
         std::cout << "        nuRatio: " << mNuRatio << std::endl;
+        if constexpr (UseQ6ZeroCompletion) {
+            std::cout << "Q6 zero completion: "
+                      << (useQ6ZeroCompletion ? "active" : "retained fallback")
+                      << std::endl;
+            if (q6ZeroCompletionFallback)
+                std::cout << "  fallback reason: common split reached y/6"
+                          << std::endl;
+        }
         std::cout << std::endl;
         if (t[0] + t[1] + t[2] > 0.0) {
             std::cout << "--------------- Loop 1 16-bit ---------------" << std::endl;
