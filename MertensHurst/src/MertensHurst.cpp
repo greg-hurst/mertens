@@ -938,6 +938,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 } else {
                     const UInt64 numerator = q6PartialArgs[bi];
                     auto accumulateCell = [&](auto&& quotientAt) {
+                        #pragma clang loop unroll_count(4)
                         for (UInt32 ai = cellBegin; ai < cellEnd; ++ai) {
                             const UInt64 quotient = quotientAt(q6Bases[ai]);
                             const Int64 value =
