@@ -1,7 +1,15 @@
+#ifndef MERTENSHURST_Q30_COUPLED
+#define MERTENSHURST_Q30_COUPLED 0
+#endif
+
 #include "MertensHurst.h"
 #include "S2Q6.h"
 #include "S1.h"
 #include "S1Q6.h"
+#if MERTENSHURST_Q30_COUPLED
+#include "S2Q30.h"
+#include "S1Q30.h"
+#endif
 #include "OuterRecovery.h"
 #include "SegmentedMertensSieve.h"
 
@@ -79,6 +87,17 @@ static_assert(MERTENSHURST_Q6_ZERO_COMPLETION == 0
 static_assert(!UseQ6ZeroCompletion || (UseCoherentQ6 && !UseFullRecovery),
               "Q6 zero completion requires final-value coherent Q6");
 
+#ifndef MERTENSHURST_Q6_ZERO_COMPLETION_VALIDATE
+#define MERTENSHURST_Q6_ZERO_COMPLETION_VALIDATE 0
+#endif
+static constexpr bool ValidateQ6ZeroCompletion =
+    MERTENSHURST_Q6_ZERO_COMPLETION_VALIDATE;
+static_assert(MERTENSHURST_Q6_ZERO_COMPLETION_VALIDATE == 0
+              || MERTENSHURST_Q6_ZERO_COMPLETION_VALIDATE == 1,
+              "MERTENSHURST_Q6_ZERO_COMPLETION_VALIDATE must be 0 or 1");
+static_assert(!ValidateQ6ZeroCompletion || UseQ6ZeroCompletion,
+              "Q6 zero-completion validation requires zero completion");
+
 // Completed groups have no auxiliary partial-value interpretation. The
 // optimized profile stores only their hot accumulators in worklist order.
 #ifndef MERTENSHURST_Q6_COMPACT_HOT_STATE
@@ -92,6 +111,15 @@ static_assert(MERTENSHURST_Q6_COMPACT_HOT_STATE == 0
 static_assert(!UseQ6CompactHotState
               || (UseQ6ZeroCompletion && UseUnorderedS2),
               "compact Q6 state requires zero completion and unordered S2");
+
+static constexpr bool UseQ30Coupled = MERTENSHURST_Q30_COUPLED;
+static_assert(MERTENSHURST_Q30_COUPLED == 0
+              || MERTENSHURST_Q30_COUPLED == 1,
+              "MERTENSHURST_Q30_COUPLED must be 0 or 1");
+static_assert(!UseQ30Coupled
+              || (UseQ6CompactHotState && MERTENSHURST_COHERENT_PERIOD36
+                  && !UseFullRecovery),
+              "coupled Q30 requires the final-value compact Q6 stack");
 
 #ifndef MERTENSHURST_VALIDATE_UNORDERED_S2
 #define MERTENSHURST_VALIDATE_UNORDERED_S2 0
@@ -169,7 +197,11 @@ static std::vector<UInt32> sievePrimesUpToSqrt(UInt64 limit) {
 class MertensComputer {
 public:
     Int64 compute(UInt128 n, bool profile, UInt64 segmentCap,
-                  UInt64 uOverride, double uFactor, double nuRatio);
+                  UInt64 uOverride, double uFactor, double nuRatio
+#if MERTENSHURST_Q6_ZERO_COMPLETION_VALIDATE
+                  , bool allowZeroCompletion = true
+#endif
+    );
 
 private:
     SegmentedMertensSieveCore mSieve;
@@ -297,7 +329,11 @@ void MertensComputer::initializeBounds(
 // ============================================================================
 
 Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
-                               UInt64 uOverride, double uFactor, double nuRatio) {
+                               UInt64 uOverride, double uFactor, double nuRatio
+#if MERTENSHURST_Q6_ZERO_COMPLETION_VALIDATE
+                               , bool allowZeroCompletion
+#endif
+) {
     // 10^8 <= n
     if (__builtin_expect(n < 100000000ULL, false)) {
         std::cerr << "Error: MertensComputer::compute requires n >= 10^8." << std::endl;
@@ -455,8 +491,16 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     UInt64 q6WideCount = 0;
     UInt32 compactHalf = 0;
     bool useQ6ZeroCompletion = UseQ6ZeroCompletion;
+#if MERTENSHURST_Q6_ZERO_COMPLETION_VALIDATE
+    useQ6ZeroCompletion = useQ6ZeroCompletion && allowZeroCompletion;
+#endif
     bool q6ZeroCompletionFallback = false;
     bool useQ6CompactHotState = false;
+#if MERTENSHURST_Q30_COUPLED
+    bool useQ30Coupled = false;
+    bool q30UpstreamFallback = false;
+    bool q30GuardFallback = false;
+#endif
     if constexpr (UseS1OuterQ6) {
         s1Q6Worklist = buildS1Q6Worklist(
             hash2.data(), static_cast<UInt32>(mx), nu
@@ -474,6 +518,35 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 }
             }
         }
+#if MERTENSHURST_Q30_COUPLED
+        if (useQ6ZeroCompletion) {
+            useQ30Coupled = true;
+            for (const S1Q6WorkItem& item : s1Q6Worklist) {
+                const UInt32 index = item.compactIndex;
+                if (hash2[index] % 5 == 0) continue;
+                const UInt128 y = index <= cnt128
+                    ? partialArgs128[index]
+                    : UInt128(partialArgs[index]);
+                const UInt64 commonNu = nusVec[index];
+                if (commonNu == 0 || commonNu >= u
+                    || UInt128(commonNu) >= y / 30) {
+                    useQ30Coupled = false;
+                    q30GuardFallback = true;
+                    break;
+                }
+            }
+            if (useQ30Coupled) {
+                s1Q6Worklist.erase(std::remove_if(
+                    s1Q6Worklist.begin(), s1Q6Worklist.end(),
+                    [&](const S1Q6WorkItem& item) {
+                        return hash2[item.compactIndex] % 5 == 0;
+                    }
+                ), s1Q6Worklist.end());
+            }
+        } else {
+            q30UpstreamFallback = true;
+        }
+#endif
         if constexpr (UseQ6CompactHotState)
             useQ6CompactHotState = useQ6ZeroCompletion;
         if constexpr (!UseCoherentQ6) {
@@ -507,12 +580,21 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 );
                 q6CommonNu[workIndex] = commonNu;
                 q6CommonKappa[workIndex] = commonKappa;
-                q6BoundaryFactor[workIndex] = coherentS1BoundaryFactor(
-                    useQ6ZeroCompletion
-                        ? S1OuterQ6Mode::Full6
-                        : s1Q6Worklist[workIndex].mode,
-                    commonKappa
-                );
+#if MERTENSHURST_Q30_COUPLED
+                if (useQ30Coupled) {
+                    q6BoundaryFactor[workIndex] =
+                        coherentS1BoundaryFactorQ30(commonKappa);
+                } else {
+#endif
+                    q6BoundaryFactor[workIndex] = coherentS1BoundaryFactor(
+                        useQ6ZeroCompletion
+                            ? S1OuterQ6Mode::Full6
+                            : s1Q6Worklist[workIndex].mode,
+                        commonKappa
+                    );
+#if MERTENSHURST_Q30_COUPLED
+                }
+#endif
             }
             if constexpr (!UseCoherentQ6) {
                 const UInt128 y3 = y / 3;
@@ -736,7 +818,11 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     }
 
     auto applyS1Segment = [&](auto* mertensCoarse, const Int8* residual,
-                              UInt64 segmentLo, UInt64 segmentHi) {
+                              UInt64 segmentLo, UInt64 segmentHi
+#if MERTENSHURST_Q30_COUPLED
+                              , bool loop2
+#endif
+                              ) {
         if constexpr (UseS1OuterQ6) {
             #pragma omp parallel for schedule(dynamic, 1)
             for (UInt64 workIndex = 0; workIndex < s1Q6Worklist.size(); ++workIndex) {
@@ -745,7 +831,18 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 if (__builtin_expect(index > cnt128, true)) {
                     if constexpr (UseCoherentQ6) {
                         if (useQ6ZeroCompletion) {
-                            const Int64 value = evaluateCompletedS1OuterQ6(
+                            const Int64 value =
+#if MERTENSHURST_Q30_COUPLED
+                            useQ30Coupled
+                            ? evaluateS1OuterQ30ZeroComplete(
+                                q6PartialArgs[workIndex],
+                                q6PartialArgsDivU[workIndex],
+                                q6CommonKappa[workIndex], segmentLo, segmentHi,
+                                mertensCoarse, residual, qCache, dCAP, loop2
+                            )
+                            :
+#endif
+                            evaluateCompletedS1OuterQ6(
                                 q6PartialArgs[workIndex],
                                 q6PartialArgsDivU[workIndex],
                                 q6CommonKappa[workIndex], segmentLo, segmentHi,
@@ -776,7 +873,18 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 } else {
                     if constexpr (UseCoherentQ6) {
                         if (useQ6ZeroCompletion) {
-                            const Int128 value = evaluateCompletedS1OuterQ6(
+                            const Int128 value =
+#if MERTENSHURST_Q30_COUPLED
+                            useQ30Coupled
+                            ? evaluateS1OuterQ30ZeroComplete(
+                                q6PartialArgs128[workIndex],
+                                q6PartialArgsDivU[workIndex],
+                                q6CommonKappa[workIndex], segmentLo, segmentHi,
+                                mertensCoarse, residual, qCache, dCAP, loop2
+                            )
+                            :
+#endif
+                            evaluateCompletedS1OuterQ6(
                                 q6PartialArgs128[workIndex],
                                 q6PartialArgsDivU[workIndex],
                                 q6CommonKappa[workIndex], segmentLo, segmentHi,
@@ -917,6 +1025,310 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             );
         }
 
+#if MERTENSHURST_Q30_COUPLED
+        auto evaluateRow = [&](UInt32 bi) -> Int128 {
+            const UInt64 b = q6Bases[bi];
+            const UInt64 reverseNu = q6CommonNu[bi];
+            const UInt32 forwardActive = countSplitAtLeast(b, bi);
+            const UInt32 reverseActive = countBasesAtMost(reverseNu, bi);
+            const UInt32 rowEnd = std::max(forwardActive, reverseActive);
+
+            const bool wide = bi < unorderedWideCount;
+            Int128 wideDiagonal = 0;
+            Int64 narrowDiagonal = 0;
+            const std::size_t diagonalInner =
+#if MERTENSHURST_Q30_COUPLED
+                useQ30Coupled
+                ? CoherentS2Q30::innerClass(b, reverseNu)
+                :
+#endif
+                CoherentS2Q6::innerClass(b, reverseNu);
+            const bool diagonalActive =
+#if MERTENSHURST_Q30_COUPLED
+                useQ30Coupled
+                ? diagonalInner < CoherentS2Q30::ClassCount
+                :
+#endif
+                diagonalInner < CoherentS2Q6::ClassCount;
+            if (diagonalActive) {
+                if (wide) {
+                    const Int128 quotient = static_cast<Int128>(
+                        q6PartialArgs128[bi] / b
+                    );
+#if MERTENSHURST_Q30_COUPLED
+                    if (useQ30Coupled) {
+                        wideDiagonal = CoherentS2Q30::evaluatePeriod(
+                            diagonalInner, quotient
+                        );
+                    } else
+#endif
+                    {
+                        const std::size_t diagonalMode =
+                            CoherentS2Q6::modeIndex(
+                                q6OuterClass(bi), diagonalInner
+                            );
+                        wideDiagonal = CoherentS2Q6::evaluatePeriodKernelValue(
+                            CoherentS2Q6::PeriodTable[diagonalMode], quotient
+                        );
+                    }
+                } else {
+                    const UInt64 quotient = q6PartialArgs[bi] / b;
+#if MERTENSHURST_Q30_COUPLED
+                    if (useQ30Coupled) {
+                        narrowDiagonal = CoherentS2Q30::evaluatePeriod(
+                            diagonalInner, static_cast<Int64>(quotient)
+                        );
+                    } else
+#endif
+                    {
+                        const std::size_t diagonalMode =
+                            CoherentS2Q6::modeIndex(
+                                q6OuterClass(bi), diagonalInner
+                            );
+                        narrowDiagonal = CoherentS2Q6::evaluatePeriodKernel(
+                            CoherentS2Q6::PeriodTable[diagonalMode], quotient
+                        );
+                    }
+                }
+            }
+            if (rowEnd == 0)
+                return wide ? wideDiagonal : Int128(narrowDiagonal);
+
+#if MERTENSHURST_Q30_COUPLED
+            std::array<UInt32, 20> endpoints{};
+#else
+            std::array<UInt32, 14> endpoints{};
+#endif
+            std::size_t endpointCount = 0;
+            auto addEndpoint = [&](UInt32 endpoint) {
+                endpoints[endpointCount++] = std::min(endpoint, rowEnd);
+            };
+
+            addEndpoint(0);
+            addEndpoint(rowEnd);
+#if MERTENSHURST_Q30_COUPLED
+            if (useQ30Coupled) {
+                addEndpoint(countSplitAtLeast(30 * b, bi));
+                addEndpoint(countSplitAtLeast(15 * b, bi));
+                addEndpoint(countSplitAtLeast(10 * b, bi));
+                addEndpoint(countSplitAtLeast(6 * b, bi));
+                addEndpoint(countSplitAtLeast(5 * b, bi));
+                addEndpoint(countSplitAtLeast(3 * b, bi));
+                addEndpoint(countSplitAtLeast(2 * b, bi));
+                addEndpoint(forwardActive);
+                addEndpoint(countBasesAtMost(reverseNu / 30, bi));
+                addEndpoint(countBasesAtMost(reverseNu / 15, bi));
+                addEndpoint(countBasesAtMost(reverseNu / 10, bi));
+                addEndpoint(countBasesAtMost(reverseNu / 6, bi));
+                addEndpoint(countBasesAtMost(reverseNu / 5, bi));
+                addEndpoint(countBasesAtMost(reverseNu / 3, bi));
+                addEndpoint(countBasesAtMost(reverseNu / 2, bi));
+                addEndpoint(reverseActive);
+            } else {
+#endif
+            addEndpoint(countSplitAtLeast(6 * b, bi));
+            addEndpoint(countSplitAtLeast(3 * b, bi));
+            addEndpoint(countSplitAtLeast(2 * b, bi));
+            addEndpoint(forwardActive);
+            addEndpoint(countBasesAtMost(reverseNu / 6, bi));
+            addEndpoint(countBasesAtMost(reverseNu / 3, bi));
+            addEndpoint(countBasesAtMost(reverseNu / 2, bi));
+            addEndpoint(reverseActive);
+            if (!useQ6ZeroCompletion) {
+                addEndpoint(outerClassCutoffs[0]);
+                addEndpoint(outerClassCutoffs[1]);
+                addEndpoint(outerClassCutoffs[2]);
+            }
+#if MERTENSHURST_Q30_COUPLED
+            }
+#endif
+            if constexpr (UseDivisionFree)
+                addEndpoint(cacheCutoff);
+
+            std::sort(endpoints.begin(), endpoints.begin() + endpointCount);
+            endpointCount = static_cast<std::size_t>(std::unique(
+                endpoints.begin(), endpoints.begin() + endpointCount
+            ) - endpoints.begin());
+
+            Int128 wideOffDiagonal = 0;
+            Int64 narrowOffDiagonal = 0;
+            for (std::size_t cell = 1; cell < endpointCount; ++cell) {
+                const UInt32 cellBegin = endpoints[cell - 1];
+                const UInt32 cellEnd = endpoints[cell];
+                if (cellBegin == cellEnd) continue;
+
+                const UInt64 a = q6Bases[cellBegin];
+                const std::size_t forwardInner =
+#if MERTENSHURST_Q30_COUPLED
+                    useQ30Coupled
+                    ? CoherentS2Q30::innerClass(
+                        b, q6CommonNu[cellBegin]
+                    )
+                    :
+#endif
+                    CoherentS2Q6::innerClass(b, q6CommonNu[cellBegin]);
+                const std::size_t reverseInner =
+#if MERTENSHURST_Q30_COUPLED
+                    useQ30Coupled
+                    ? CoherentS2Q30::innerClass(a, reverseNu)
+                    :
+#endif
+                    CoherentS2Q6::innerClass(a, reverseNu);
+                const std::size_t classCount =
+#if MERTENSHURST_Q30_COUPLED
+                    useQ30Coupled
+                    ? CoherentS2Q30::ClassCount
+                    :
+#endif
+                    CoherentS2Q6::ClassCount;
+                const bool forward = forwardInner < classCount;
+                const bool reverse = reverseInner < classCount;
+                if (!forward && !reverse) continue;
+
+#if MERTENSHURST_Q30_COUPLED
+                if (useQ30Coupled) {
+                    const std::size_t forwardMode = forwardInner;
+                    const std::size_t reverseMode = reverseInner;
+                    if (wide) {
+                        const UInt128 numerator = q6PartialArgs128[bi];
+                        for (UInt32 ai = cellBegin; ai < cellEnd; ++ai) {
+                            const Int128 quotient = static_cast<Int128>(
+                                numerator / q6Bases[ai]
+                            );
+                            const Int128 value = forward && reverse
+                                ? CoherentS2Q30::evaluatePairPeriod(
+                                    forwardMode, reverseMode, quotient
+                                )
+                                : CoherentS2Q30::evaluatePeriod(
+                                    forward ? forwardMode : reverseMode,
+                                    quotient
+                                );
+                            wideOffDiagonal += q6Signs[ai] < 0
+                                ? -value
+                                : value;
+                        }
+                    } else {
+                        const UInt64 numerator = q6PartialArgs[bi];
+                        auto accumulateCell = [&](auto&& quotientAt) {
+                            #pragma clang loop unroll_count(4)
+                            for (UInt32 ai = cellBegin; ai < cellEnd; ++ai) {
+                                const Int64 quotient = static_cast<Int64>(
+                                    quotientAt(q6Bases[ai])
+                                );
+                                const Int64 value = forward && reverse
+                                    ? CoherentS2Q30::evaluatePairPeriod(
+                                        forwardMode, reverseMode, quotient
+                                    )
+                                    : CoherentS2Q30::evaluatePeriod(
+                                        forward ? forwardMode : reverseMode,
+                                        quotient
+                                    );
+                                narrowOffDiagonal += q6Signs[ai] < 0
+                                    ? -value
+                                    : value;
+                            }
+                        };
+
+                        if constexpr (UseDivisionFree) {
+                            if (q6Bases[cellBegin] <= dCAP) {
+                                accumulateCell([&](UInt64 denominator) {
+                                    return qCache.quotient(
+                                        numerator, denominator
+                                    );
+                                });
+                            } else {
+                                accumulateCell([&](UInt64 denominator) {
+                                    return numerator / denominator;
+                                });
+                            }
+                        } else {
+                            accumulateCell([&](UInt64 denominator) {
+                                return numerator / denominator;
+                            });
+                        }
+                    }
+                    continue;
+                }
+#endif
+
+                std::size_t forwardMode = 0;
+                std::size_t reverseMode = 0;
+                if (forward) {
+                    forwardMode = CoherentS2Q6::modeIndex(
+                        q6OuterClass(cellBegin), forwardInner
+                    );
+                }
+                if (reverse) {
+                    reverseMode = CoherentS2Q6::modeIndex(
+                        q6OuterClass(bi), reverseInner
+                    );
+                }
+
+                const CoherentS2Q6::PeriodKernel& kernel =
+                    forward && reverse
+                    ? CoherentS2Q6::PairPeriodTable[forwardMode][reverseMode]
+                    : CoherentS2Q6::PeriodTable[
+                        forward ? forwardMode : reverseMode
+                    ];
+
+                if (wide) {
+                    const UInt128 numerator = q6PartialArgs128[bi];
+                    for (UInt32 ai = cellBegin; ai < cellEnd; ++ai) {
+                        const Int128 quotient = static_cast<Int128>(
+                            numerator / q6Bases[ai]
+                        );
+                        const Int128 value =
+                            CoherentS2Q6::evaluatePeriodKernelValue(
+                                kernel, quotient
+                            );
+                        wideOffDiagonal += q6Signs[ai] < 0 ? -value : value;
+                    }
+                } else {
+                    const UInt64 numerator = q6PartialArgs[bi];
+                    auto accumulateCell = [&](auto&& quotientAt) {
+                        #pragma clang loop unroll_count(4)
+                        for (UInt32 ai = cellBegin; ai < cellEnd; ++ai) {
+                            const UInt64 quotient = quotientAt(q6Bases[ai]);
+                            const Int64 value =
+                                CoherentS2Q6::evaluatePeriodKernel(
+                                    kernel, quotient
+                                );
+                            narrowOffDiagonal += q6Signs[ai] < 0
+                                ? -value
+                                : value;
+                        }
+                    };
+
+                    if constexpr (UseDivisionFree) {
+                        if (q6Bases[cellBegin] <= dCAP) {
+                            accumulateCell([&](UInt64 denominator) {
+                                return qCache.quotient(numerator, denominator);
+                            });
+                        } else {
+                            accumulateCell([&](UInt64 denominator) {
+                                return numerator / denominator;
+                            });
+                        }
+                    } else {
+                        accumulateCell([&](UInt64 denominator) {
+                            return numerator / denominator;
+                        });
+                    }
+                }
+            }
+
+            if (wide) {
+                return wideDiagonal + (q6Signs[bi] < 0
+                    ? -wideOffDiagonal
+                    : wideOffDiagonal);
+            }
+            const Int128 narrowOffDiagonal128 = Int128(narrowOffDiagonal);
+            return Int128(narrowDiagonal) + (q6Signs[bi] < 0
+                ? -narrowOffDiagonal128
+                : narrowOffDiagonal128);
+        };
+
+#else
         auto evaluateRow = [&](UInt32 bi) -> Int128 {
             const UInt64 b = q6Bases[bi];
             const UInt64 reverseNu = q6CommonNu[bi];
@@ -1076,6 +1488,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 ? -narrowOffDiagonal128
                 : narrowOffDiagonal128);
         };
+#endif
 
         std::vector<Int128> threadTotals(omp_get_max_threads(), Int128(0));
         #pragma omp parallel
@@ -1109,23 +1522,55 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                     Int128 row = 0;
                     for (UInt32 bi = 0; bi < innerCount; ++bi) {
                         const std::size_t innerClass =
+#if MERTENSHURST_Q30_COUPLED
+                            useQ30Coupled
+                            ? CoherentS2Q30::innerClass(q6Bases[bi], split)
+                            :
+#endif
                             CoherentS2Q6::innerClass(q6Bases[bi], split);
-                        if (innerClass >= CoherentS2Q6::ClassCount) continue;
+                        const std::size_t classCount =
+#if MERTENSHURST_Q30_COUPLED
+                            useQ30Coupled
+                            ? CoherentS2Q30::ClassCount
+                            :
+#endif
+                            CoherentS2Q6::ClassCount;
+                        if (innerClass >= classCount) continue;
                         Int128 value;
                         if (ai < unorderedWideCount) {
                             const Int128 quotient = static_cast<Int128>(
                                 q6PartialArgs128[ai] / q6Bases[bi]
                             );
+#if MERTENSHURST_Q30_COUPLED
+                            if (useQ30Coupled) {
+                                value = CoherentS2Q30::evaluateDirect(
+                                    innerClass, quotient
+                                );
+                            } else
+#endif
+                            {
                             value = CoherentS2Q6::evaluateDivisorClasses(
                                 outerClass, innerClass, quotient
                             );
+                            }
                         } else {
                             const Int64 quotient = static_cast<Int64>(
                                 q6PartialArgs[ai] / q6Bases[bi]
                             );
+#if MERTENSHURST_Q30_COUPLED
+                            if (useQ30Coupled) {
+                                value = Int128(
+                                    CoherentS2Q30::evaluateDirect(
+                                        innerClass, quotient
+                                    )
+                                );
+                            } else
+#endif
+                            {
                             value = Int128(CoherentS2Q6::evaluateDivisorClasses(
                                 outerClass, innerClass, quotient
                             ));
+                            }
                         }
                         row += Int128(q6Signs[bi]) * value;
                     }
@@ -1208,6 +1653,14 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 
     auto applyCompactS2_64 = [&](UInt32 workIndex, UInt64 lo,
                                   UInt64 hi) -> Int64 {
+#if MERTENSHURST_Q30_COUPLED
+        if (useQ30Coupled) {
+            return update_S2_coherent_q30(
+                q6PartialArgs[workIndex], L1, lo, hi, MuP,
+                q6CommonNu[workIndex], qCache, dCAP
+            );
+        }
+#endif
         return update_S2_coherent_q6(
             q6PartialArgs[workIndex], L1, lo, hi, MuP,
             0, q6CommonNu[workIndex], qCache, dCAP
@@ -1216,6 +1669,14 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 
     auto applyCompactS2_128 = [&](UInt32 workIndex, UInt64 lo,
                                    UInt64 hi) -> Int128 {
+#if MERTENSHURST_Q30_COUPLED
+        if (useQ30Coupled) {
+            return update_S2_coherent_q30_128(
+                q6PartialArgs128[workIndex], L1, lo, hi, MuP,
+                q6CommonNu[workIndex]
+            );
+        }
+#endif
         return update_S2_coherent_q6_128(
             q6PartialArgs128[workIndex], L1, lo, hi, MuP,
             0, q6CommonNu[workIndex]
@@ -1377,7 +1838,11 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 
             // ------------ S1 Step ------------
             START_PROFILE();
-            applyS1Segment(_MP, RP, L1, L2);
+            applyS1Segment(_MP, RP, L1, L2
+#if MERTENSHURST_Q30_COUPLED
+                           , false
+#endif
+                           );
             END_PROFILE(t[prof_base + 2]);
 
             // ------------ Extra term Step ------------
@@ -1496,7 +1961,11 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         END_PROFILE(t[6]);
 
         START_PROFILE();
-        applyS1Segment(MP, RP, L1, L2);
+        applyS1Segment(MP, RP, L1, L2
+#if MERTENSHURST_Q30_COUPLED
+                       , true
+#endif
+                       );
         END_PROFILE(t[7]);
 
         L1 = L2 + 1;
@@ -1607,6 +2076,15 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                       << (useQ6CompactHotState ? "active" : "retained fallback")
                       << std::endl;
         }
+#if MERTENSHURST_Q30_COUPLED
+        std::cout << "Coupled Q30: "
+                  << (useQ30Coupled ? "active" : "Q6 fallback")
+                  << std::endl;
+        if (q30GuardFallback)
+            std::cout << "  fallback reason: full-Q30 guard" << std::endl;
+        if (q30UpstreamFallback)
+            std::cout << "  fallback reason: upstream Q6 guard" << std::endl;
+#endif
         std::cout << std::endl;
         if (t[0] + t[1] + t[2] > 0.0) {
             std::cout << "--------------- Loop 1 16-bit ---------------" << std::endl;
@@ -1647,8 +2125,32 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 
 Int64 MertensHurst(UInt128 n, bool profile, UInt64 segmentCap,
                    UInt64 uOverride, double uFactor, double nuRatio) {
+#if MERTENSHURST_Q6_ZERO_COMPLETION_VALIDATE
+    Int64 result;
+    {
+        MertensComputer computer;
+        result = computer.compute(
+            n, profile, segmentCap, uOverride, uFactor, nuRatio
+        );
+    }
+    Int64 retainedResult;
+    {
+        MertensComputer computer;
+        retainedResult = computer.compute(
+            n, false, segmentCap, uOverride, uFactor, nuRatio, false
+        );
+    }
+    if (retainedResult != result) {
+        std::cerr << "Internal error: validated result " << result
+                  << " does not match retained Q6 result "
+                  << retainedResult << "." << std::endl;
+        std::abort();
+    }
+    return result;
+#else
     MertensComputer computer;
     return computer.compute(n, profile, segmentCap, uOverride, uFactor, nuRatio);
+#endif
 }
 
 #undef START_PROFILE
