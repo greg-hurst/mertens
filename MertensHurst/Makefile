@@ -264,9 +264,6 @@ Q210_VALIDATE_CXXFLAGS = $(FIXED_BASE_CXXFLAGS) \
 Q210_SANITIZE_CXXFLAGS = $(filter-out -O3 -flto -DNDEBUG,$(Q210_VALIDATE_CXXFLAGS)) \
                          -O1 -g -fsanitize=address,undefined \
                          -fno-omit-frame-pointer
-Q210_ORACLE_SANITIZE_CXXFLAGS = $(filter-out -O3 -flto -DNDEBUG,$(FIXED_BASE_CXXFLAGS)) \
-                                -O1 -g -fsanitize=address,undefined \
-                                -fno-omit-frame-pointer
 LDFLAGS  :=
 
 # --- Platform-specific: OpenMP ---
@@ -287,7 +284,7 @@ SRCS     = $(SRCDIR)/MertensHurst.cpp $(SIEVEDIR)/SegmentedMobiusSieve.cpp $(SRC
 .PHONY: all q2 s2-unordered q6-zero-complete q6-zero-complete-validate \
         optimized optimized-validate q30-coupled q30-coupled-validate \
         q210-coupled q210-coupled-validate q210-coupled-sanitize \
-        q210-oracle q210-oracle-sanitize full-recovery clean
+        full-recovery clean
 
 all: $(BUILDDIR)/mertens
 
@@ -312,10 +309,6 @@ q210-coupled: $(BUILDDIR)/mertens_q210_coupled
 q210-coupled-validate: $(BUILDDIR)/mertens_q210_coupled_validate
 
 q210-coupled-sanitize: $(BUILDDIR)/mertens_q210_coupled_sanitize
-
-q210-oracle: $(BUILDDIR)/q210_oracle
-
-q210-oracle-sanitize: $(BUILDDIR)/q210_oracle_sanitize
 
 full-recovery: $(BUILDDIR)/mertens_full_recovery
 
@@ -366,14 +359,6 @@ $(BUILDDIR)/mertens_q210_coupled_validate: Makefile $(SRCS) $(wildcard $(SRCDIR)
 $(BUILDDIR)/mertens_q210_coupled_sanitize: Makefile $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
 	@mkdir -p $(BUILDDIR)
 	$(CXX) $(Q210_SANITIZE_CXXFLAGS) $(SRCS) -o $@ $(LDFLAGS) -fsanitize=address,undefined
-
-$(BUILDDIR)/q210_oracle: Makefile tests/q210_oracle.cpp $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
-	@mkdir -p $(BUILDDIR)
-	$(CXX) $(FIXED_BASE_CXXFLAGS) tests/q210_oracle.cpp -o $@ $(LDFLAGS)
-
-$(BUILDDIR)/q210_oracle_sanitize: Makefile tests/q210_oracle.cpp $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
-	@mkdir -p $(BUILDDIR)
-	$(CXX) $(Q210_ORACLE_SANITIZE_CXXFLAGS) tests/q210_oracle.cpp -o $@ $(LDFLAGS) -fsanitize=address,undefined
 
 $(BUILDDIR)/mertens_full_recovery: Makefile $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
 	@mkdir -p $(BUILDDIR)

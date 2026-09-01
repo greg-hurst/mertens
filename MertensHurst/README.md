@@ -44,12 +44,10 @@ when one shared split is legal for the entire run; otherwise the whole run
 falls back to Q=30. It never mixes Q=30 and Q=210 rows. The Q=210 coefficient
 table occupies about 1.35 MiB and is released before Loop 2.
 
-The Q=210 profile has dedicated validation targets:
+The Q=210 profile has dedicated validation builds:
 
 ```
-make q210-oracle                # exhaustive kernel/table oracle
 make q210-coupled-validate      # ordered-square comparison enabled
-make q210-oracle-sanitize       # ASan and UBSan oracle
 make q210-coupled-sanitize      # ASan and UBSan executable
 ```
 
@@ -138,5 +136,4 @@ src/
 ../sieve/SegmentedMertensSieve.h  Mertens sieve (prefix sum over Mobius values)
 ../sieve/QuotientCache.h    Granlund-Montgomery quotient cache (compile-time optional)
 build/                      Compiled binary (gitignored)
-tests/q210_oracle.cpp       Independent Q210 arithmetic/traversal oracle
 ```

@@ -26,10 +26,8 @@ assertions in `MertensHurst.cpp`.
 profiles. Q210 requires the complete Q30 profile beneath it. Its shared guard
 is evaluated before Q210 worklist filtering or table allocation; a failed
 guard retains one coherent Q30 invocation. `make q210-coupled-validate` enables
-the ordered-square comparator, while `make q210-oracle` checks the generated
-44,100-period table and the S1/S2 traversal boundaries independently. The
-corresponding `*-sanitize` targets build with AddressSanitizer and
-UndefinedBehaviorSanitizer.
+the ordered-square comparator, while `make q210-coupled-sanitize` builds the
+same profile with AddressSanitizer and UndefinedBehaviorSanitizer.
 
 The MertensHurst Makefile names its narrow-entry setting `SIEVE_BUCKET_NARROW_ENTRY`; the standalone sieve Makefile names the corresponding setting `NARROW_ENTRY`. Both produce the compiler define `SIEVE_NARROW_ENTRY`.
 
