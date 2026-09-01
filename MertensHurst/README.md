@@ -25,7 +25,6 @@ make q2     # build the original all-Q2 reference binary
 make s2-unordered  # build the coherent period-36/unordered-S2 profile
 make q30-coupled   # build the complete coupled Q=30 profile
 make q210-coupled  # build the complete coupled Q=210 profile
-make q210-s1-paired-seam  # build the native-Q30 paired-S1 hybrid
 make clean  # remove build artifacts
 ```
 
@@ -45,19 +44,11 @@ when one shared split is legal for the entire run; otherwise the whole run
 falls back to Q=30. It never mixes Q=30 and Q=210 rows. The Q=210 coefficient
 table occupies about 1.35 MiB and is released before Loop 2.
 
-The opt-in `q210-s1-paired-seam` target is a different Q210/Q30 hybrid. It
-keeps the native-Q30 boundary, S2 kernels, row state, Loop 2, and recovery.
-Only Loop 0/1 S1 pairs existing rows `a` and `7a`, replacing their signed Q30
-sums by one coprime-210 sum and an exact short Q30 correction. The profile is
-final-value-only, default-off, and falls back with the complete Q30 profile.
-
-The Q=210 profiles have dedicated validation builds:
+The Q=210 profile has dedicated validation builds:
 
 ```
 make q210-coupled-validate      # ordered-square comparison enabled
 make q210-coupled-sanitize      # ASan and UBSan executable
-make q210-s1-paired-seam-validate  # pair and segment identity checks
-make q210-s1-paired-seam-sanitize  # ASan and UBSan hybrid
 ```
 
 ### Division-free mode
@@ -133,7 +124,6 @@ src/
   S1Q6.h                    Exact outer-Q6 S1 transform kernels
   S1Q30.h                   Completed outer-Q30 S1 kernels
   S1Q210.h                  Completed outer-Q210 S1 kernels
-  S1Q210PairedSeam.h        Native-Q30 paired-row S1 correction
   S2.h                      S2 summation functions (64-bit and 128-bit)
   S2Q6.h                    Exact outer-Q6 S2 dispatch
   S2Q6Modes.h               Static outer-Q6 S2 coefficient modes
