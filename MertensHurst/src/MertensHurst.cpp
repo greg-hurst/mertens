@@ -2,6 +2,10 @@
 #define MERTENSHURST_Q30_COUPLED 0
 #endif
 
+#ifndef MERTENSHURST_Q210_COUPLED
+#define MERTENSHURST_Q210_COUPLED 0
+#endif
+
 #include "MertensHurst.h"
 #include "S2Q6.h"
 #include "S1.h"
@@ -9,6 +13,11 @@
 #if MERTENSHURST_Q30_COUPLED
 #include "S2Q30.h"
 #include "S1Q30.h"
+#endif
+#if MERTENSHURST_Q210_COUPLED
+#include "S2Q210.h"
+#include "S1Q210.h"
+#include <memory>
 #endif
 #include "OuterRecovery.h"
 #include "SegmentedMertensSieve.h"
@@ -120,6 +129,20 @@ static_assert(!UseQ30Coupled
               || (UseQ6CompactHotState && MERTENSHURST_COHERENT_PERIOD36
                   && !UseFullRecovery),
               "coupled Q30 requires the final-value compact Q6 stack");
+
+// Coupled Q=210 promotes one complete Q30 invocation. If its stricter shared
+// split fails anywhere, the entire run retains the already-selected Q30 state.
+#if MERTENSHURST_Q210_COUPLED
+static_assert(MERTENSHURST_Q210_COUPLED == 1,
+              "MERTENSHURST_Q210_COUPLED must be 0 or 1");
+static constexpr bool UseQ210Coupled = true;
+static_assert(!UseQ210Coupled || UseQ30Coupled,
+              "coupled Q210 requires the whole-run Q30 profile");
+static_assert(!UseQ210Coupled
+              || (UseQ6CompactHotState && UseUnorderedS2
+                  && !UseFullRecovery),
+              "coupled Q210 requires the final-value compact unordered stack");
+#endif
 
 #ifndef MERTENSHURST_VALIDATE_UNORDERED_S2
 #define MERTENSHURST_VALIDATE_UNORDERED_S2 0
@@ -468,6 +491,14 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 
     const UInt64 nuMax = nusVec[1];
     const UInt32 cnt128 = partialArgs128.size()-1;
+#if MERTENSHURST_Q210_COUPLED
+    if (nuMax <= B) {
+        std::cerr << "Error: Q210 requires nuMax > the initial sieve bound "
+                  << "(nuMax=" << nuMax << ", B=" << B << "). "
+                  << "Increase --nu-ratio or n." << std::endl;
+        std::abort();
+    }
+#endif
 
     // Keep S1/S2 bounds for active Q=6 entries contiguous. State needed by
     // every square-free entry remains in the full compact arrays.
@@ -500,6 +531,11 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     bool useQ30Coupled = false;
     bool q30UpstreamFallback = false;
     bool q30GuardFallback = false;
+#endif
+#if MERTENSHURST_Q210_COUPLED
+    bool useQ210Coupled = false;
+    bool q210GuardFallback = false;
+    std::unique_ptr<CoherentS2Q210::DensePeriodTable> q210PeriodTable;
 #endif
     if constexpr (UseS1OuterQ6) {
         s1Q6Worklist = buildS1Q6Worklist(
@@ -535,6 +571,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                     break;
                 }
             }
+#if !MERTENSHURST_Q210_COUPLED
             if (useQ30Coupled) {
                 s1Q6Worklist.erase(std::remove_if(
                     s1Q6Worklist.begin(), s1Q6Worklist.end(),
@@ -543,9 +580,45 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                     }
                 ), s1Q6Worklist.end());
             }
+#endif
         } else {
             q30UpstreamFallback = true;
         }
+#if MERTENSHURST_Q210_COUPLED
+        if (useQ30Coupled) {
+            useQ210Coupled = true;
+            for (const S1Q6WorkItem& item : s1Q6Worklist) {
+                const UInt32 index = item.compactIndex;
+                const UInt32 base = hash2[index];
+                if (base % 5 == 0 || base % 7 == 0) continue;
+                const UInt128 y = index <= cnt128
+                    ? partialArgs128[index]
+                    : UInt128(partialArgs[index]);
+                const UInt64 commonNu = nusVec[index];
+                if (commonNu == 0 || commonNu >= u
+                    || UInt128(commonNu) >= y / 210) {
+                    useQ210Coupled = false;
+                    q210GuardFallback = true;
+                    break;
+                }
+            }
+        }
+        if (useQ30Coupled) {
+            s1Q6Worklist.erase(std::remove_if(
+                s1Q6Worklist.begin(), s1Q6Worklist.end(),
+                [&](const S1Q6WorkItem& item) {
+                    const UInt32 base = hash2[item.compactIndex];
+                    if (useQ210Coupled)
+                        return base % 5 == 0 || base % 7 == 0;
+                    return base % 5 == 0;
+                }
+            ), s1Q6Worklist.end());
+        }
+        if (useQ210Coupled)
+            q210PeriodTable = std::make_unique<
+                CoherentS2Q210::DensePeriodTable
+            >();
+#endif
 #endif
         if constexpr (UseQ6CompactHotState)
             useQ6CompactHotState = useQ6ZeroCompletion;
@@ -580,7 +653,13 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 );
                 q6CommonNu[workIndex] = commonNu;
                 q6CommonKappa[workIndex] = commonKappa;
-#if MERTENSHURST_Q30_COUPLED
+#if MERTENSHURST_Q210_COUPLED
+                if (useQ30Coupled) {
+                    q6BoundaryFactor[workIndex] = useQ210Coupled
+                        ? coherentS1BoundaryFactorQ210(commonKappa)
+                        : coherentS1BoundaryFactorQ30(commonKappa);
+                } else {
+#elif MERTENSHURST_Q30_COUPLED
                 if (useQ30Coupled) {
                     q6BoundaryFactor[workIndex] =
                         coherentS1BoundaryFactorQ30(commonKappa);
@@ -832,15 +911,31 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                     if constexpr (UseCoherentQ6) {
                         if (useQ6ZeroCompletion) {
                             const Int64 value =
-#if MERTENSHURST_Q30_COUPLED
-                            useQ30Coupled
-                            ? evaluateS1OuterQ30ZeroComplete(
+#if MERTENSHURST_Q210_COUPLED
+                            useQ30Coupled ?
+                            (useQ210Coupled
+                            ? evaluateS1OuterQ210ZeroComplete(
                                 q6PartialArgs[workIndex],
                                 q6PartialArgsDivU[workIndex],
                                 q6CommonKappa[workIndex], segmentLo, segmentHi,
                                 mertensCoarse, residual, qCache, dCAP, loop2
                             )
                             :
+                            evaluateS1OuterQ30ZeroComplete(
+                                q6PartialArgs[workIndex],
+                                q6PartialArgsDivU[workIndex],
+                                q6CommonKappa[workIndex], segmentLo, segmentHi,
+                                mertensCoarse, residual, qCache, dCAP, loop2
+                            )
+                            ) :
+#elif MERTENSHURST_Q30_COUPLED
+                            useQ30Coupled
+                            ? evaluateS1OuterQ30ZeroComplete(
+                                q6PartialArgs[workIndex],
+                                q6PartialArgsDivU[workIndex],
+                                q6CommonKappa[workIndex], segmentLo, segmentHi,
+                                mertensCoarse, residual, qCache, dCAP, loop2
+                            ) :
 #endif
                             evaluateCompletedS1OuterQ6(
                                 q6PartialArgs[workIndex],
@@ -874,15 +969,31 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                     if constexpr (UseCoherentQ6) {
                         if (useQ6ZeroCompletion) {
                             const Int128 value =
-#if MERTENSHURST_Q30_COUPLED
-                            useQ30Coupled
-                            ? evaluateS1OuterQ30ZeroComplete(
+#if MERTENSHURST_Q210_COUPLED
+                            useQ30Coupled ?
+                            (useQ210Coupled
+                            ? evaluateS1OuterQ210ZeroComplete(
                                 q6PartialArgs128[workIndex],
                                 q6PartialArgsDivU[workIndex],
                                 q6CommonKappa[workIndex], segmentLo, segmentHi,
                                 mertensCoarse, residual, qCache, dCAP, loop2
                             )
                             :
+                            evaluateS1OuterQ30ZeroComplete(
+                                q6PartialArgs128[workIndex],
+                                q6PartialArgsDivU[workIndex],
+                                q6CommonKappa[workIndex], segmentLo, segmentHi,
+                                mertensCoarse, residual, qCache, dCAP, loop2
+                            )
+                            ) :
+#elif MERTENSHURST_Q30_COUPLED
+                            useQ30Coupled
+                            ? evaluateS1OuterQ30ZeroComplete(
+                                q6PartialArgs128[workIndex],
+                                q6PartialArgsDivU[workIndex],
+                                q6CommonKappa[workIndex], segmentLo, segmentHi,
+                                mertensCoarse, residual, qCache, dCAP, loop2
+                            ) :
 #endif
                             evaluateCompletedS1OuterQ6(
                                 q6PartialArgs128[workIndex],
@@ -1007,6 +1118,23 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             return lo;
         };
 
+#if MERTENSHURST_Q210_COUPLED
+        auto countScaledSplitAtLeast = [&](UInt64 value,
+                                           UInt64 divisor,
+                                           UInt32 limit) -> UInt32 {
+            UInt32 lo = 0;
+            UInt32 hi = limit;
+            while (lo < hi) {
+                const UInt32 middle = lo + (hi - lo) / 2;
+                if (value <= q6CommonNu[middle] / divisor)
+                    lo = middle + 1;
+                else
+                    hi = middle;
+            }
+            return lo;
+        };
+#endif
+
         const std::array<UInt32, 3> outerClassCutoffs = {
             countBasesAtMost(
                 nu / 6, static_cast<UInt32>(q6Bases.size())
@@ -1037,6 +1165,11 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             Int128 wideDiagonal = 0;
             Int64 narrowDiagonal = 0;
             const std::size_t diagonalInner =
+#if MERTENSHURST_Q210_COUPLED
+                useQ210Coupled
+                ? CoherentS2Q210::innerClass(b, reverseNu)
+                :
+#endif
 #if MERTENSHURST_Q30_COUPLED
                 useQ30Coupled
                 ? CoherentS2Q30::innerClass(b, reverseNu)
@@ -1044,6 +1177,11 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 #endif
                 CoherentS2Q6::innerClass(b, reverseNu);
             const bool diagonalActive =
+#if MERTENSHURST_Q210_COUPLED
+                useQ210Coupled
+                ? diagonalInner < CoherentS2Q210::ClassCount
+                :
+#endif
 #if MERTENSHURST_Q30_COUPLED
                 useQ30Coupled
                 ? diagonalInner < CoherentS2Q30::ClassCount
@@ -1052,27 +1190,46 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 diagonalInner < CoherentS2Q6::ClassCount;
             if (diagonalActive) {
                 if (wide) {
-                    const Int128 quotient = static_cast<Int128>(
-                        q6PartialArgs128[bi] / b
-                    );
-#if MERTENSHURST_Q30_COUPLED
-                    if (useQ30Coupled) {
-                        wideDiagonal = CoherentS2Q30::evaluatePeriod(
-                            diagonalInner, quotient
+#if MERTENSHURST_Q210_COUPLED
+                    if (useQ210Coupled) {
+                        const UInt128 quotient = q6PartialArgs128[bi] / b;
+                        wideDiagonal = CoherentS2Q210::evaluatePeriod(
+                            *q210PeriodTable, diagonalInner, quotient
                         );
                     } else
 #endif
                     {
-                        const std::size_t diagonalMode =
-                            CoherentS2Q6::modeIndex(
-                                q6OuterClass(bi), diagonalInner
-                            );
-                        wideDiagonal = CoherentS2Q6::evaluatePeriodKernelValue(
-                            CoherentS2Q6::PeriodTable[diagonalMode], quotient
+                        const Int128 quotient = static_cast<Int128>(
+                            q6PartialArgs128[bi] / b
                         );
+#if MERTENSHURST_Q30_COUPLED
+                        if (useQ30Coupled) {
+                            wideDiagonal = CoherentS2Q30::evaluatePeriod(
+                                diagonalInner, quotient
+                            );
+                        } else
+#endif
+                        {
+                            const std::size_t diagonalMode =
+                                CoherentS2Q6::modeIndex(
+                                    q6OuterClass(bi), diagonalInner
+                                );
+                            wideDiagonal =
+                                CoherentS2Q6::evaluatePeriodKernelValue(
+                                    CoherentS2Q6::PeriodTable[diagonalMode],
+                                    quotient
+                                );
+                        }
                     }
                 } else {
                     const UInt64 quotient = q6PartialArgs[bi] / b;
+#if MERTENSHURST_Q210_COUPLED
+                    if (useQ210Coupled) {
+                        narrowDiagonal = CoherentS2Q210::evaluatePeriod64(
+                            *q210PeriodTable, diagonalInner, quotient
+                        );
+                    } else
+#endif
 #if MERTENSHURST_Q30_COUPLED
                     if (useQ30Coupled) {
                         narrowDiagonal = CoherentS2Q30::evaluatePeriod(
@@ -1094,18 +1251,57 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             if (rowEnd == 0)
                 return wide ? wideDiagonal : Int128(narrowDiagonal);
 
-#if MERTENSHURST_Q30_COUPLED
+#if MERTENSHURST_Q210_COUPLED
+            std::array<UInt32, 36> endpoints{};
+#elif MERTENSHURST_Q30_COUPLED
             std::array<UInt32, 20> endpoints{};
 #else
             std::array<UInt32, 14> endpoints{};
 #endif
             std::size_t endpointCount = 0;
             auto addEndpoint = [&](UInt32 endpoint) {
+                assert(endpointCount < endpoints.size());
                 endpoints[endpointCount++] = std::min(endpoint, rowEnd);
             };
 
             addEndpoint(0);
             addEndpoint(rowEnd);
+#if MERTENSHURST_Q210_COUPLED
+            if (useQ210Coupled) {
+                addEndpoint(countScaledSplitAtLeast(b, 210, bi));
+                addEndpoint(countScaledSplitAtLeast(b, 105, bi));
+                addEndpoint(countScaledSplitAtLeast(b, 70, bi));
+                addEndpoint(countScaledSplitAtLeast(b, 42, bi));
+                addEndpoint(countScaledSplitAtLeast(b, 35, bi));
+                addEndpoint(countScaledSplitAtLeast(b, 30, bi));
+                addEndpoint(countScaledSplitAtLeast(b, 21, bi));
+                addEndpoint(countScaledSplitAtLeast(b, 15, bi));
+                addEndpoint(countScaledSplitAtLeast(b, 14, bi));
+                addEndpoint(countScaledSplitAtLeast(b, 10, bi));
+                addEndpoint(countScaledSplitAtLeast(b, 7, bi));
+                addEndpoint(countScaledSplitAtLeast(b, 6, bi));
+                addEndpoint(countScaledSplitAtLeast(b, 5, bi));
+                addEndpoint(countScaledSplitAtLeast(b, 3, bi));
+                addEndpoint(countScaledSplitAtLeast(b, 2, bi));
+                addEndpoint(forwardActive);
+                addEndpoint(countBasesAtMost(reverseNu / 210, bi));
+                addEndpoint(countBasesAtMost(reverseNu / 105, bi));
+                addEndpoint(countBasesAtMost(reverseNu / 70, bi));
+                addEndpoint(countBasesAtMost(reverseNu / 42, bi));
+                addEndpoint(countBasesAtMost(reverseNu / 35, bi));
+                addEndpoint(countBasesAtMost(reverseNu / 30, bi));
+                addEndpoint(countBasesAtMost(reverseNu / 21, bi));
+                addEndpoint(countBasesAtMost(reverseNu / 15, bi));
+                addEndpoint(countBasesAtMost(reverseNu / 14, bi));
+                addEndpoint(countBasesAtMost(reverseNu / 10, bi));
+                addEndpoint(countBasesAtMost(reverseNu / 7, bi));
+                addEndpoint(countBasesAtMost(reverseNu / 6, bi));
+                addEndpoint(countBasesAtMost(reverseNu / 5, bi));
+                addEndpoint(countBasesAtMost(reverseNu / 3, bi));
+                addEndpoint(countBasesAtMost(reverseNu / 2, bi));
+                addEndpoint(reverseActive);
+            } else
+#endif
 #if MERTENSHURST_Q30_COUPLED
             if (useQ30Coupled) {
                 addEndpoint(countSplitAtLeast(30 * b, bi));
@@ -1159,6 +1355,13 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 
                 const UInt64 a = q6Bases[cellBegin];
                 const std::size_t forwardInner =
+#if MERTENSHURST_Q210_COUPLED
+                    useQ210Coupled
+                    ? CoherentS2Q210::innerClass(
+                        b, q6CommonNu[cellBegin]
+                    )
+                    :
+#endif
 #if MERTENSHURST_Q30_COUPLED
                     useQ30Coupled
                     ? CoherentS2Q30::innerClass(
@@ -1168,6 +1371,11 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 #endif
                     CoherentS2Q6::innerClass(b, q6CommonNu[cellBegin]);
                 const std::size_t reverseInner =
+#if MERTENSHURST_Q210_COUPLED
+                    useQ210Coupled
+                    ? CoherentS2Q210::innerClass(a, reverseNu)
+                    :
+#endif
 #if MERTENSHURST_Q30_COUPLED
                     useQ30Coupled
                     ? CoherentS2Q30::innerClass(a, reverseNu)
@@ -1175,6 +1383,11 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 #endif
                     CoherentS2Q6::innerClass(a, reverseNu);
                 const std::size_t classCount =
+#if MERTENSHURST_Q210_COUPLED
+                    useQ210Coupled
+                    ? CoherentS2Q210::ClassCount
+                    :
+#endif
 #if MERTENSHURST_Q30_COUPLED
                     useQ30Coupled
                     ? CoherentS2Q30::ClassCount
@@ -1184,6 +1397,74 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 const bool forward = forwardInner < classCount;
                 const bool reverse = reverseInner < classCount;
                 if (!forward && !reverse) continue;
+
+#if MERTENSHURST_Q210_COUPLED
+                if (useQ210Coupled) {
+                    const std::size_t forwardMode = forwardInner;
+                    const std::size_t reverseMode = reverseInner;
+                    if (wide) {
+                        const UInt128 numerator = q6PartialArgs128[bi];
+                        for (UInt32 ai = cellBegin; ai < cellEnd; ++ai) {
+                            const UInt128 quotient = numerator / q6Bases[ai];
+                            const Int128 value = forward && reverse
+                                ? CoherentS2Q210::evaluatePairPeriod(
+                                    *q210PeriodTable, forwardMode,
+                                    reverseMode, quotient
+                                )
+                                : CoherentS2Q210::evaluatePeriod(
+                                    *q210PeriodTable,
+                                    forward ? forwardMode : reverseMode,
+                                    quotient
+                                );
+                            wideOffDiagonal += q6Signs[ai] < 0
+                                ? -value
+                                : value;
+                        }
+                    } else {
+                        const UInt64 numerator = q6PartialArgs[bi];
+                        auto accumulateCell = [&](auto&& quotientAt) {
+                            #pragma clang loop unroll_count(4)
+                            for (UInt32 ai = cellBegin; ai < cellEnd; ++ai) {
+                                const UInt64 quotient = quotientAt(
+                                    q6Bases[ai]
+                                );
+                                const Int64 value = forward && reverse
+                                    ? CoherentS2Q210::evaluatePairPeriod64(
+                                        *q210PeriodTable, forwardMode,
+                                        reverseMode, quotient
+                                    )
+                                    : CoherentS2Q210::evaluatePeriod64(
+                                        *q210PeriodTable,
+                                        forward ? forwardMode : reverseMode,
+                                        quotient
+                                    );
+                                narrowOffDiagonal += q6Signs[ai] < 0
+                                    ? -value
+                                    : value;
+                            }
+                        };
+
+                        if constexpr (UseDivisionFree) {
+                            if (q6Bases[cellBegin] <= dCAP) {
+                                accumulateCell([&](UInt64 denominator) {
+                                    return qCache.quotient(
+                                        numerator, denominator
+                                    );
+                                });
+                            } else {
+                                accumulateCell([&](UInt64 denominator) {
+                                    return numerator / denominator;
+                                });
+                            }
+                        } else {
+                            accumulateCell([&](UInt64 denominator) {
+                                return numerator / denominator;
+                            });
+                        }
+                    }
+                    continue;
+                }
+#endif
 
 #if MERTENSHURST_Q30_COUPLED
                 if (useQ30Coupled) {
@@ -1522,6 +1803,13 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                     Int128 row = 0;
                     for (UInt32 bi = 0; bi < innerCount; ++bi) {
                         const std::size_t innerClass =
+#if MERTENSHURST_Q210_COUPLED
+                            useQ210Coupled
+                            ? CoherentS2Q210::innerClass(
+                                q6Bases[bi], split
+                            )
+                            :
+#endif
 #if MERTENSHURST_Q30_COUPLED
                             useQ30Coupled
                             ? CoherentS2Q30::innerClass(q6Bases[bi], split)
@@ -1529,6 +1817,11 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 #endif
                             CoherentS2Q6::innerClass(q6Bases[bi], split);
                         const std::size_t classCount =
+#if MERTENSHURST_Q210_COUPLED
+                            useQ210Coupled
+                            ? CoherentS2Q210::ClassCount
+                            :
+#endif
 #if MERTENSHURST_Q30_COUPLED
                             useQ30Coupled
                             ? CoherentS2Q30::ClassCount
@@ -1538,38 +1831,63 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                         if (innerClass >= classCount) continue;
                         Int128 value;
                         if (ai < unorderedWideCount) {
-                            const Int128 quotient = static_cast<Int128>(
-                                q6PartialArgs128[ai] / q6Bases[bi]
-                            );
-#if MERTENSHURST_Q30_COUPLED
-                            if (useQ30Coupled) {
-                                value = CoherentS2Q30::evaluateDirect(
+#if MERTENSHURST_Q210_COUPLED
+                            if (useQ210Coupled) {
+                                const UInt128 quotient =
+                                    q6PartialArgs128[ai] / q6Bases[bi];
+                                value = CoherentS2Q210::evaluateDirect(
                                     innerClass, quotient
                                 );
                             } else
 #endif
                             {
-                            value = CoherentS2Q6::evaluateDivisorClasses(
-                                outerClass, innerClass, quotient
-                            );
+                                const Int128 quotient = static_cast<Int128>(
+                                    q6PartialArgs128[ai] / q6Bases[bi]
+                                );
+#if MERTENSHURST_Q30_COUPLED
+                                if (useQ30Coupled) {
+                                    value = CoherentS2Q30::evaluateDirect(
+                                        innerClass, quotient
+                                    );
+                                } else
+#endif
+                                {
+                                    value =
+                                        CoherentS2Q6::evaluateDivisorClasses(
+                                            outerClass, innerClass, quotient
+                                        );
+                                }
                             }
                         } else {
-                            const Int64 quotient = static_cast<Int64>(
-                                q6PartialArgs[ai] / q6Bases[bi]
-                            );
-#if MERTENSHURST_Q30_COUPLED
-                            if (useQ30Coupled) {
-                                value = Int128(
-                                    CoherentS2Q30::evaluateDirect(
-                                        innerClass, quotient
-                                    )
+#if MERTENSHURST_Q210_COUPLED
+                            if (useQ210Coupled) {
+                                const UInt64 quotient =
+                                    q6PartialArgs[ai] / q6Bases[bi];
+                                value = CoherentS2Q210::evaluateDirect(
+                                    innerClass, quotient
                                 );
                             } else
 #endif
                             {
-                            value = Int128(CoherentS2Q6::evaluateDivisorClasses(
-                                outerClass, innerClass, quotient
-                            ));
+                                const Int64 quotient = static_cast<Int64>(
+                                    q6PartialArgs[ai] / q6Bases[bi]
+                                );
+#if MERTENSHURST_Q30_COUPLED
+                                if (useQ30Coupled) {
+                                    value = Int128(
+                                        CoherentS2Q30::evaluateDirect(
+                                            innerClass, quotient
+                                        )
+                                    );
+                                } else
+#endif
+                                {
+                                    value = Int128(
+                                        CoherentS2Q6::evaluateDivisorClasses(
+                                            outerClass, innerClass, quotient
+                                        )
+                                    );
+                                }
                             }
                         }
                         row += Int128(q6Signs[bi]) * value;
@@ -1654,6 +1972,14 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     auto applyCompactS2_64 = [&](UInt32 workIndex, UInt64 lo,
                                   UInt64 hi) -> Int64 {
 #if MERTENSHURST_Q30_COUPLED
+#if MERTENSHURST_Q210_COUPLED
+        if (useQ210Coupled) {
+            return update_S2_coherent_q210(
+                *q210PeriodTable, q6PartialArgs[workIndex], L1, lo, hi, MuP,
+                q6CommonNu[workIndex], qCache, dCAP
+            );
+        }
+#endif
         if (useQ30Coupled) {
             return update_S2_coherent_q30(
                 q6PartialArgs[workIndex], L1, lo, hi, MuP,
@@ -1670,6 +1996,15 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     auto applyCompactS2_128 = [&](UInt32 workIndex, UInt64 lo,
                                    UInt64 hi) -> Int128 {
 #if MERTENSHURST_Q30_COUPLED
+#if MERTENSHURST_Q210_COUPLED
+        if (useQ210Coupled) {
+            return update_S2_coherent_q210_128(
+                *q210PeriodTable, q6PartialArgs128[workIndex],
+                L1, lo, hi, MuP,
+                q6CommonNu[workIndex]
+            );
+        }
+#endif
         if (useQ30Coupled) {
             return update_S2_coherent_q30_128(
                 q6PartialArgs128[workIndex], L1, lo, hi, MuP,
@@ -1917,6 +2252,9 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     releaseVector(chunks);
     releaseVector(R);
     releaseVector(M16);
+#if MERTENSHURST_Q210_COUPLED
+    q210PeriodTable.reset();
+#endif
     if constexpr (UseS1OuterQ6) {
         releaseVector(partialArgs);
         releaseVector(partialArgs128);
@@ -2084,6 +2422,20 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             std::cout << "  fallback reason: full-Q30 guard" << std::endl;
         if (q30UpstreamFallback)
             std::cout << "  fallback reason: upstream Q6 guard" << std::endl;
+#endif
+#if MERTENSHURST_Q210_COUPLED
+        std::cout << "Coupled Q210: "
+                  << (useQ210Coupled ? "active" : "Q30 fallback")
+                  << std::endl;
+        if (!useQ210Coupled) {
+            std::cout << "  fallback reason: "
+                      << (!useQ30Coupled
+                              ? "upstream Q30 guard"
+                              : q210GuardFallback
+                                  ? "full-Q210 guard"
+                                  : "Q210 not selected")
+                      << std::endl;
+        }
 #endif
         std::cout << std::endl;
         if (t[0] + t[1] + t[2] > 0.0) {

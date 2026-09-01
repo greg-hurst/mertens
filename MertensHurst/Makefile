@@ -46,6 +46,7 @@ Q6_ZERO_COMPLETION ?= 0
 Q6_ZERO_COMPLETION_VALIDATE ?= 0
 Q6_COMPACT_HOT_STATE ?= 0
 Q30_COUPLED ?= 0
+Q210_COUPLED ?= 0
 
 # --- Base flags (all platforms) ---
 CXXFLAGS := -O3 -std=c++17 \
@@ -69,7 +70,8 @@ CXXFLAGS := -O3 -std=c++17 \
             -DMERTENSHURST_Q6_ZERO_COMPLETION=$(Q6_ZERO_COMPLETION) \
             -DMERTENSHURST_Q6_ZERO_COMPLETION_VALIDATE=$(Q6_ZERO_COMPLETION_VALIDATE) \
             -DMERTENSHURST_Q6_COMPACT_HOT_STATE=$(Q6_COMPACT_HOT_STATE) \
-            -DMERTENSHURST_Q30_COUPLED=$(Q30_COUPLED)
+            -DMERTENSHURST_Q30_COUPLED=$(Q30_COUPLED) \
+            -DMERTENSHURST_Q210_COUPLED=$(Q210_COUPLED)
 
 # Extra defines, e.g. make EXTRA_CXXFLAGS="-DSIEVE_LP_SIZE=1024 -DSIEVE_STRIDE_LOG=7"
 CXXFLAGS += $(EXTRA_CXXFLAGS)
@@ -99,7 +101,9 @@ CONTRACT_FILTERS = -DMERTENSHURST_FULL_RECOVERY=% \
                    -DMERTENSHURST_Q6_COMPACT_HOT_STATE=% \
                    -DMERTENSHURST_Q6_COMPACT_HOT_STATE -UMERTENSHURST_Q6_COMPACT_HOT_STATE \
                    -DMERTENSHURST_Q30_COUPLED=% \
-                   -DMERTENSHURST_Q30_COUPLED -UMERTENSHURST_Q30_COUPLED
+                   -DMERTENSHURST_Q30_COUPLED -UMERTENSHURST_Q30_COUPLED \
+                   -DMERTENSHURST_Q210_COUPLED=% \
+                   -DMERTENSHURST_Q210_COUPLED -UMERTENSHURST_Q210_COUPLED
 FIXED_BASE_CXXFLAGS = $(filter-out $(CONTRACT_FILTERS),$(CXXFLAGS))
 
 Q2_CXXFLAGS = $(FIXED_BASE_CXXFLAGS) \
@@ -227,6 +231,42 @@ Q30_VALIDATE_CXXFLAGS = $(FIXED_BASE_CXXFLAGS) \
                         -DMERTENSHURST_Q6_ZERO_COMPLETION_VALIDATE=1 \
                         -DMERTENSHURST_Q6_COMPACT_HOT_STATE=1 \
                         -DMERTENSHURST_Q30_COUPLED=1
+
+Q210_CXXFLAGS = $(FIXED_BASE_CXXFLAGS) \
+                -DMERTENSHURST_FULL_RECOVERY=0 \
+                -DMERTENSHURST_S1_OUTER_Q6=1 \
+                -DMERTENSHURST_S2_OUTER_Q6=1 \
+                -DMERTENSHURST_COHERENT_Q6=1 \
+                -DMERTENSHURST_COHERENT_PERIOD36=1 \
+                -DMERTENSHURST_UNORDERED_S2=1 \
+                -DMERTENSHURST_VALIDATE_UNORDERED_S2=0 \
+                -DMERTENSHURST_VALIDATE_UNORDERED_S2_WIDE=0 \
+                -DMERTENSHURST_Q6_ZERO_COMPLETION=1 \
+                -DMERTENSHURST_Q6_ZERO_COMPLETION_VALIDATE=0 \
+                -DMERTENSHURST_Q6_COMPACT_HOT_STATE=1 \
+                -DMERTENSHURST_Q30_COUPLED=1 \
+                -DMERTENSHURST_Q210_COUPLED=1
+
+Q210_VALIDATE_CXXFLAGS = $(FIXED_BASE_CXXFLAGS) \
+                         -DMERTENSHURST_FULL_RECOVERY=0 \
+                         -DMERTENSHURST_S1_OUTER_Q6=1 \
+                         -DMERTENSHURST_S2_OUTER_Q6=1 \
+                         -DMERTENSHURST_COHERENT_Q6=1 \
+                         -DMERTENSHURST_COHERENT_PERIOD36=1 \
+                         -DMERTENSHURST_UNORDERED_S2=1 \
+                         -DMERTENSHURST_VALIDATE_UNORDERED_S2=1 \
+                         -DMERTENSHURST_VALIDATE_UNORDERED_S2_WIDE=1 \
+                         -DMERTENSHURST_Q6_ZERO_COMPLETION=1 \
+                         -DMERTENSHURST_Q6_ZERO_COMPLETION_VALIDATE=1 \
+                         -DMERTENSHURST_Q6_COMPACT_HOT_STATE=1 \
+                         -DMERTENSHURST_Q30_COUPLED=1 \
+                         -DMERTENSHURST_Q210_COUPLED=1
+Q210_SANITIZE_CXXFLAGS = $(filter-out -O3 -flto -DNDEBUG,$(Q210_VALIDATE_CXXFLAGS)) \
+                         -O1 -g -fsanitize=address,undefined \
+                         -fno-omit-frame-pointer
+Q210_ORACLE_SANITIZE_CXXFLAGS = $(filter-out -O3 -flto -DNDEBUG,$(FIXED_BASE_CXXFLAGS)) \
+                                -O1 -g -fsanitize=address,undefined \
+                                -fno-omit-frame-pointer
 LDFLAGS  :=
 
 # --- Platform-specific: OpenMP ---
@@ -246,7 +286,8 @@ SRCS     = $(SRCDIR)/MertensHurst.cpp $(SIEVEDIR)/SegmentedMobiusSieve.cpp $(SRC
 
 .PHONY: all q2 s2-unordered q6-zero-complete q6-zero-complete-validate \
         optimized optimized-validate q30-coupled q30-coupled-validate \
-        full-recovery clean
+        q210-coupled q210-coupled-validate q210-coupled-sanitize \
+        q210-oracle q210-oracle-sanitize full-recovery clean
 
 all: $(BUILDDIR)/mertens
 
@@ -265,6 +306,16 @@ optimized-validate: $(BUILDDIR)/mertens_optimized_validate
 q30-coupled: $(BUILDDIR)/mertens_q30_coupled
 
 q30-coupled-validate: $(BUILDDIR)/mertens_q30_coupled_validate
+
+q210-coupled: $(BUILDDIR)/mertens_q210_coupled
+
+q210-coupled-validate: $(BUILDDIR)/mertens_q210_coupled_validate
+
+q210-coupled-sanitize: $(BUILDDIR)/mertens_q210_coupled_sanitize
+
+q210-oracle: $(BUILDDIR)/q210_oracle
+
+q210-oracle-sanitize: $(BUILDDIR)/q210_oracle_sanitize
 
 full-recovery: $(BUILDDIR)/mertens_full_recovery
 
@@ -303,6 +354,26 @@ $(BUILDDIR)/mertens_q30_coupled: Makefile $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wi
 $(BUILDDIR)/mertens_q30_coupled_validate: Makefile $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
 	@mkdir -p $(BUILDDIR)
 	$(CXX) $(Q30_VALIDATE_CXXFLAGS) $(SRCS) -o $@ $(LDFLAGS)
+
+$(BUILDDIR)/mertens_q210_coupled: Makefile $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
+	@mkdir -p $(BUILDDIR)
+	$(CXX) $(Q210_CXXFLAGS) $(SRCS) -o $@ $(LDFLAGS)
+
+$(BUILDDIR)/mertens_q210_coupled_validate: Makefile $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
+	@mkdir -p $(BUILDDIR)
+	$(CXX) $(Q210_VALIDATE_CXXFLAGS) $(SRCS) -o $@ $(LDFLAGS)
+
+$(BUILDDIR)/mertens_q210_coupled_sanitize: Makefile $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
+	@mkdir -p $(BUILDDIR)
+	$(CXX) $(Q210_SANITIZE_CXXFLAGS) $(SRCS) -o $@ $(LDFLAGS) -fsanitize=address,undefined
+
+$(BUILDDIR)/q210_oracle: Makefile tests/q210_oracle.cpp $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
+	@mkdir -p $(BUILDDIR)
+	$(CXX) $(FIXED_BASE_CXXFLAGS) tests/q210_oracle.cpp -o $@ $(LDFLAGS)
+
+$(BUILDDIR)/q210_oracle_sanitize: Makefile tests/q210_oracle.cpp $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
+	@mkdir -p $(BUILDDIR)
+	$(CXX) $(Q210_ORACLE_SANITIZE_CXXFLAGS) tests/q210_oracle.cpp -o $@ $(LDFLAGS) -fsanitize=address,undefined
 
 $(BUILDDIR)/mertens_full_recovery: Makefile $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
 	@mkdir -p $(BUILDDIR)

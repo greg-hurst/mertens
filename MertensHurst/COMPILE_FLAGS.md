@@ -10,6 +10,8 @@ All performance-only: every configuration computes the same $M(n)$. The Makefile
 | `FUSED_FINALIZE` | 1 | Fold Möbius finalization into the Mertens prefix scan in Loop 2, avoiding a separate pass over the sieve buffer. Becomes `-DSIEVE_FUSED_FINALIZE`. |
 | `S1_OUTER_Q6` | 1 | Exact outer $Q=6$ transform for $S_1$. Set this and `S2_OUTER_Q6` to `0`, or use `make q2`, to build the original all-$Q=2$ reference path. |
 | `S2_OUTER_Q6` | 1 | Exact outer $Q=6$ for $S_2$. It requires `S1_OUTER_Q6=1`. Together with inner Q6 this is the normal `build/mertens` path; `make q2` preserves the all-Q2 oracle as `build/mertens_q2`. |
+| `Q30_COUPLED` | 0 | Complete outer/inner $Q=30$ promotion. Use `make q30-coupled`; the named target fixes the compatible compact unordered stack and emits `build/mertens_q30_coupled`. |
+| `Q210_COUPLED` | 0 | Complete outer/inner $Q=210$ promotion with whole-run fallback to Q30. Use `make q210-coupled`; the named target fixes the complete Q30/Q210 contract and emits `build/mertens_q210_coupled`. |
 | `FULL_RECOVERY` | 0 | Recover every square-free partial value by decreasing-index back substitution. Production instead obtains only the requested final value by direct Möbius inversion. The full path is retained as a correctness oracle. Becomes `-DMERTENSHURST_FULL_RECOVERY`; enable it with `make FULL_RECOVERY=1`. |
 
 `make s2-unordered` builds the opt-in `build/mertens_s2_unordered` profile.
@@ -19,6 +21,15 @@ ownership, generated period-36 kernels, and the unordered hot-$S_2$ square.
 The ordered-square validation comparator is compile-time disabled in that
 release profile. Incompatible partial combinations are rejected by static
 assertions in `MertensHurst.cpp`.
+
+`make q30-coupled` and `make q210-coupled` are likewise contract-closed named
+profiles. Q210 requires the complete Q30 profile beneath it. Its shared guard
+is evaluated before Q210 worklist filtering or table allocation; a failed
+guard retains one coherent Q30 invocation. `make q210-coupled-validate` enables
+the ordered-square comparator, while `make q210-oracle` checks the generated
+44,100-period table and the S1/S2 traversal boundaries independently. The
+corresponding `*-sanitize` targets build with AddressSanitizer and
+UndefinedBehaviorSanitizer.
 
 The MertensHurst Makefile names its narrow-entry setting `SIEVE_BUCKET_NARROW_ENTRY`; the standalone sieve Makefile names the corresponding setting `NARROW_ENTRY`. Both produce the compiler define `SIEVE_NARROW_ENTRY`.
 

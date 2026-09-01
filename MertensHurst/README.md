@@ -23,6 +23,8 @@ Linux builds with the same `make`. On Windows use WSL (see the top-level README)
 make        # build the binary
 make q2     # build the original all-Q2 reference binary
 make s2-unordered  # build the coherent period-36/unordered-S2 profile
+make q30-coupled   # build the complete coupled Q=30 profile
+make q210-coupled  # build the complete coupled Q=210 profile
 make clean  # remove build artifacts
 ```
 
@@ -35,6 +37,21 @@ a contract-closed final-value profile: coherent outer-$Q=6$ splits, generated
 period-36 kernels, and exact unordered hot-$S_2$ pairing are enabled together,
 while full recovery and the expensive ordered-square validator are disabled.
 Its runtime interface and exact result are the same as `build/mertens`.
+
+The opt-in `q30-coupled` and `q210-coupled` targets extend that same exact
+stack through the square-free divisors of 30 and 210. Q=210 is selected only
+when one shared split is legal for the entire run; otherwise the whole run
+falls back to Q=30. It never mixes Q=30 and Q=210 rows. The Q=210 coefficient
+table occupies about 1.35 MiB and is released before Loop 2.
+
+The Q=210 profile has dedicated validation targets:
+
+```
+make q210-oracle                # exhaustive kernel/table oracle
+make q210-coupled-validate      # ordered-square comparison enabled
+make q210-oracle-sanitize       # ASan and UBSan oracle
+make q210-coupled-sanitize      # ASan and UBSan executable
+```
 
 ### Division-free mode
 
@@ -107,9 +124,13 @@ src/
   MertensHurst.cpp          Algorithm orchestration (loops, final recovery)
   S1.h                      S1 summation functions (64-bit and 128-bit)
   S1Q6.h                    Exact outer-Q6 S1 transform kernels
+  S1Q30.h                   Completed outer-Q30 S1 kernels
+  S1Q210.h                  Completed outer-Q210 S1 kernels
   S2.h                      S2 summation functions (64-bit and 128-bit)
   S2Q6.h                    Exact outer-Q6 S2 dispatch
   S2Q6Modes.h               Static outer-Q6 S2 coefficient modes
+  S2Q30.h                   Coupled Q30 S2 kernels
+  S2Q210.h                  Coupled Q210 S2 kernels and period table
   OuterRecovery.h           Final-value inversion and optional full recovery
   QuotientPredictor.h       Division-free quotient estimation
   main.cpp                  Driver program
@@ -117,4 +138,5 @@ src/
 ../sieve/SegmentedMertensSieve.h  Mertens sieve (prefix sum over Mobius values)
 ../sieve/QuotientCache.h    Granlund-Montgomery quotient cache (compile-time optional)
 build/                      Compiled binary (gitignored)
+tests/q210_oracle.cpp       Independent Q210 arithmetic/traversal oracle
 ```
