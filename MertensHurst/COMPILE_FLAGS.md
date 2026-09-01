@@ -12,6 +12,8 @@ All performance-only: every configuration computes the same $M(n)$. The Makefile
 | `S2_OUTER_Q6` | 1 | Exact outer $Q=6$ for $S_2$. It requires `S1_OUTER_Q6=1`. Together with inner Q6 this is the normal `build/mertens` path; `make q2` preserves the all-Q2 oracle as `build/mertens_q2`. |
 | `Q30_COUPLED` | 0 | Complete outer/inner $Q=30$ promotion. Use `make q30-coupled`; the named target fixes the compatible compact unordered stack and emits `build/mertens_q30_coupled`. |
 | `Q210_COUPLED` | 0 | Complete outer/inner $Q=210$ promotion with whole-run fallback to Q30. Use `make q210-coupled`; the named target fixes the complete Q30/Q210 contract and emits `build/mertens_q210_coupled`. |
+| `S1_Q210_PAIRED_SEAM` | 0 | Reindex only paired native-Q30 Loop-0/1 S1 rows through coprime-210 streams and an exact Q30 seam. Use `make q210-s1-paired-seam`; boundary, S2, Loop 2, row state, and recovery remain Q30. |
+| `S1_Q210_PAIRED_SEAM_VALIDATE` | 0 | Compare the parent-coordinate seam, child-coordinate Q30 correction, and original native-Q30 pair in every transformed segment. Enabled by `make q210-s1-paired-seam-validate`. |
 | `FULL_RECOVERY` | 0 | Recover every square-free partial value by decreasing-index back substitution. Production instead obtains only the requested final value by direct Möbius inversion. The full path is retained as a correctness oracle. Becomes `-DMERTENSHURST_FULL_RECOVERY`; enable it with `make FULL_RECOVERY=1`. |
 
 `make s2-unordered` builds the opt-in `build/mertens_s2_unordered` profile.
@@ -28,6 +30,13 @@ is evaluated before Q210 worklist filtering or table allocation; a failed
 guard retains one coherent Q30 invocation. `make q210-coupled-validate` enables
 the ordered-square comparator, while `make q210-coupled-sanitize` builds the
 same profile with AddressSanitizer and UndefinedBehaviorSanitizer.
+
+`make q210-s1-paired-seam` is a separate contract-closed native-Q30 profile.
+It forces coupled Q210 off, applies the paired finite-difference identity only
+in Loop 0/1, and leaves every other Q30 domain unchanged. Its validation and
+sanitizer targets compile the pair identity checks into the executable. Every
+other named profile filters both seam controls out, and full recovery remains
+the unchanged Q6 family-producing path.
 
 The MertensHurst Makefile names its narrow-entry setting `SIEVE_BUCKET_NARROW_ENTRY`; the standalone sieve Makefile names the corresponding setting `NARROW_ENTRY`. Both produce the compiler define `SIEVE_NARROW_ENTRY`.
 

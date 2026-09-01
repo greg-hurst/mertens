@@ -6,6 +6,14 @@
 #define MERTENSHURST_Q210_COUPLED 0
 #endif
 
+#ifndef MERTENSHURST_S1_Q210_PAIRED_SEAM
+#define MERTENSHURST_S1_Q210_PAIRED_SEAM 0
+#endif
+
+#ifndef MERTENSHURST_S1_Q210_PAIRED_SEAM_VALIDATE
+#define MERTENSHURST_S1_Q210_PAIRED_SEAM_VALIDATE 0
+#endif
+
 #include "MertensHurst.h"
 #include "S2Q6.h"
 #include "S1.h"
@@ -14,10 +22,15 @@
 #include "S2Q30.h"
 #include "S1Q30.h"
 #endif
+#if MERTENSHURST_Q210_COUPLED || MERTENSHURST_S1_Q210_PAIRED_SEAM
+#include "S1Q210.h"
+#endif
 #if MERTENSHURST_Q210_COUPLED
 #include "S2Q210.h"
-#include "S1Q210.h"
 #include <memory>
+#endif
+#if MERTENSHURST_S1_Q210_PAIRED_SEAM
+#include "S1Q210PairedSeam.h"
 #endif
 #include "OuterRecovery.h"
 #include "SegmentedMertensSieve.h"
@@ -143,6 +156,27 @@ static_assert(!UseQ210Coupled
                   && !UseFullRecovery),
               "coupled Q210 requires the final-value compact unordered stack");
 #endif
+
+static constexpr bool UseS1Q210PairedSeam =
+    MERTENSHURST_S1_Q210_PAIRED_SEAM;
+static_assert(MERTENSHURST_S1_Q210_PAIRED_SEAM == 0
+              || MERTENSHURST_S1_Q210_PAIRED_SEAM == 1,
+              "MERTENSHURST_S1_Q210_PAIRED_SEAM must be 0 or 1");
+static_assert(!UseS1Q210PairedSeam
+              || (UseQ30Coupled && UseQ6CompactHotState
+                  && UseUnorderedS2 && !UseFullRecovery),
+              "paired Q210 S1 requires the final-value native-Q30 stack");
+static_assert(!(MERTENSHURST_S1_Q210_PAIRED_SEAM
+                && MERTENSHURST_Q210_COUPLED),
+              "paired Q210 S1 and coupled Q210 are separate profiles");
+
+static constexpr bool ValidateS1Q210PairedSeam =
+    MERTENSHURST_S1_Q210_PAIRED_SEAM_VALIDATE;
+static_assert(MERTENSHURST_S1_Q210_PAIRED_SEAM_VALIDATE == 0
+              || MERTENSHURST_S1_Q210_PAIRED_SEAM_VALIDATE == 1,
+              "MERTENSHURST_S1_Q210_PAIRED_SEAM_VALIDATE must be 0 or 1");
+static_assert(!ValidateS1Q210PairedSeam || UseS1Q210PairedSeam,
+              "paired Q210 S1 validation requires the paired profile");
 
 #ifndef MERTENSHURST_VALIDATE_UNORDERED_S2
 #define MERTENSHURST_VALIDATE_UNORDERED_S2 0
@@ -498,6 +532,14 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                   << "Increase --nu-ratio or n." << std::endl;
         std::abort();
     }
+#elif MERTENSHURST_S1_Q210_PAIRED_SEAM
+    if (nuMax <= B) {
+        std::cerr << "Error: paired Q210 seam requires nuMax > the initial "
+                  << "sieve bound "
+                  << "(nuMax=" << nuMax << ", B=" << B << "). "
+                  << "Increase --nu-ratio or n." << std::endl;
+        std::abort();
+    }
 #endif
 
     // Keep S1/S2 bounds for active Q=6 entries contiguous. State needed by
@@ -536,6 +578,15 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     bool useQ210Coupled = false;
     bool q210GuardFallback = false;
     std::unique_ptr<CoherentS2Q210::DensePeriodTable> q210PeriodTable;
+#endif
+#if MERTENSHURST_S1_Q210_PAIRED_SEAM
+    struct S1Q210PairTask {
+        UInt32 parent;
+        UInt32 child;
+    };
+    bool useS1Q210PairedSeam = false;
+    std::vector<S1Q210PairTask> s1Q210PairTasks;
+    UInt64 s1Q210PairCount = 0;
 #endif
     if constexpr (UseS1OuterQ6) {
         s1Q6Worklist = buildS1Q6Worklist(
@@ -618,6 +669,11 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             q210PeriodTable = std::make_unique<
                 CoherentS2Q210::DensePeriodTable
             >();
+#endif
+#if MERTENSHURST_S1_Q210_PAIRED_SEAM
+        // This changes only the finite difference of two existing Q30 S1
+        // rows, so the native-Q30 whole-run guard is the complete gate.
+        useS1Q210PairedSeam = useQ30Coupled;
 #endif
 #endif
         if constexpr (UseQ6CompactHotState)
@@ -714,6 +770,65 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 ) & 1ULL;
                 q6Signs[workIndex] = negative ? -1 : 1;
             }
+
+#if MERTENSHURST_S1_Q210_PAIRED_SEAM
+            if (useS1Q210PairedSeam) {
+                constexpr UInt32 NoChild =
+                    std::numeric_limits<UInt32>::max();
+                s1Q210PairTasks.reserve(q6Bases.size());
+                std::size_t childSearch = 0;
+                for (std::size_t parent = 0;
+                     parent < q6Bases.size();
+                     ++parent) {
+                    const UInt32 base = q6Bases[parent];
+                    if (base % 7U == 0) continue;
+
+                    const UInt64 childBase64 = UInt64(base) * 7U;
+                    if (childBase64 > nu) {
+                        s1Q210PairTasks.push_back(S1Q210PairTask{
+                            static_cast<UInt32>(parent), NoChild
+                        });
+                        continue;
+                    }
+                    if (childBase64 > std::numeric_limits<UInt32>::max()) {
+                        std::cerr << "Internal error: paired Q210 S1 child "
+                                  << "exceeds UInt32." << std::endl;
+                        std::abort();
+                    }
+
+                    const UInt32 childBase = static_cast<UInt32>(childBase64);
+                    childSearch = std::max(childSearch, parent + 1);
+                    while (childSearch < q6Bases.size()
+                           && q6Bases[childSearch] < childBase) {
+                        ++childSearch;
+                    }
+                    if (childSearch >= q6Bases.size()
+                        || q6Bases[childSearch] != childBase
+                        || q6CommonNu[childSearch] > q6CommonNu[parent]) {
+                        std::cerr << "Internal error: paired Q210 S1 mapping "
+                                  << "failed for base " << base << "."
+                                  << std::endl;
+                        std::abort();
+                    }
+                    s1Q210PairTasks.push_back(S1Q210PairTask{
+                        static_cast<UInt32>(parent),
+                        static_cast<UInt32>(childSearch)
+                    });
+                    ++s1Q210PairCount;
+                }
+
+                UInt64 childCount = 0;
+                for (UInt32 base : q6Bases)
+                    childCount += base % 7U == 0;
+                if (childCount != s1Q210PairCount
+                    || s1Q210PairTasks.size() + s1Q210PairCount
+                       != q6Bases.size()) {
+                    std::cerr << "Internal error: paired Q210 S1 task "
+                              << "partition is incomplete." << std::endl;
+                    std::abort();
+                }
+            }
+#endif
         }
 
         auto compactQ6Bounds = [&](std::vector<UInt64>& compact,
@@ -903,6 +1018,110 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 #endif
                               ) {
         if constexpr (UseS1OuterQ6) {
+#if MERTENSHURST_S1_Q210_PAIRED_SEAM
+            if (useS1Q210PairedSeam && !loop2) {
+                constexpr UInt32 NoChild =
+                    std::numeric_limits<UInt32>::max();
+                #pragma omp parallel for schedule(dynamic, 1)
+                for (UInt64 taskIndex = 0;
+                     taskIndex < s1Q210PairTasks.size();
+                     ++taskIndex) {
+                    const S1Q210PairTask task = s1Q210PairTasks[taskIndex];
+                    const UInt32 parent = task.parent;
+
+                    auto applyTask = [&](const auto& y, auto& destination) {
+                        using Arg = std::decay_t<decltype(y)>;
+                        using Acc = S1Q6Detail::Accumulator<Arg>;
+                        if (task.child == NoChild) {
+                            destination -= evaluateS1OuterQ30ZeroComplete(
+                                y, q6PartialArgsDivU[parent],
+                                q6CommonKappa[parent], segmentLo, segmentHi,
+                                mertensCoarse, residual, qCache, dCAP, false
+                            );
+                            return;
+                        }
+
+                        const UInt32 child = task.child;
+                        const UInt64 commonChildKappa =
+                            q6CommonKappa[parent] / 7U;
+                        const UInt64 nativeChildKappa =
+                            q6CommonKappa[child];
+                        const Acc parentQ210 =
+                            evaluateS1OuterQ210ZeroComplete(
+                                y, q6PartialArgsDivU[parent],
+                                q6CommonKappa[parent], segmentLo, segmentHi,
+                                mertensCoarse, residual, qCache, dCAP, false
+                            );
+                        const Acc seam = evaluateS1Q210PairedSeam(
+                            y, commonChildKappa, nativeChildKappa,
+                            segmentLo, segmentHi, mertensCoarse, residual,
+                            qCache, dCAP
+                        );
+
+#if MERTENSHURST_S1_Q210_PAIRED_SEAM_VALIDATE
+                        const Arg childY = y / Arg(7);
+                        const Acc parentNative =
+                            evaluateS1OuterQ30ZeroComplete(
+                                y, q6PartialArgsDivU[parent],
+                                q6CommonKappa[parent], segmentLo, segmentHi,
+                                mertensCoarse, residual, qCache, dCAP, false
+                            );
+                        const Acc childNative =
+                            evaluateS1OuterQ30ZeroComplete(
+                                childY, q6PartialArgsDivU[child],
+                                nativeChildKappa, segmentLo, segmentHi,
+                                mertensCoarse, residual, qCache, dCAP, false
+                            );
+                        const Acc childCommon =
+                            evaluateS1OuterQ30ZeroComplete(
+                                childY, q6PartialArgsDivU[child],
+                                commonChildKappa, segmentLo, segmentHi,
+                                mertensCoarse, residual, qCache, dCAP, false
+                            );
+                        const Acc childSeam =
+                            commonChildKappa >= nativeChildKappa
+                            ? Acc(0)
+                            : S1Q30Detail::sumCoprime30(
+                                childY, segmentLo, segmentHi,
+                                commonChildKappa + 1, nativeChildKappa,
+                                mertensCoarse, residual, qCache, dCAP, false
+                            );
+                        if (seam != childSeam
+                            || seam != childNative - childCommon
+                            || parentQ210 - seam
+                               != parentNative - childNative) {
+                            #pragma omp critical
+                            {
+                                std::cerr
+                                    << "Internal error: paired Q210 S1 "
+                                    << "mismatch at work index " << parent
+                                    << " in segment [" << segmentLo << ','
+                                    << segmentHi << "]." << std::endl;
+                            }
+                            std::abort();
+                        }
+#endif
+                        // Native Q30 subtracts S1. The pair has magnitude
+                        // A210-J, and final recovery supplies mu(a) once.
+                        destination -= parentQ210;
+                        destination += seam;
+                    };
+
+                    if (parent < q6WideCount) {
+                        applyTask(
+                            q6PartialArgs128[parent],
+                            q6CompactValues128[parent]
+                        );
+                    } else {
+                        applyTask(
+                            q6PartialArgs[parent],
+                            q6CompactValues[parent - q6WideCount]
+                        );
+                    }
+                }
+                return;
+            }
+#endif
             #pragma omp parallel for schedule(dynamic, 1)
             for (UInt64 workIndex = 0; workIndex < s1Q6Worklist.size(); ++workIndex) {
                 const S1Q6WorkItem& item = s1Q6Worklist[workIndex];
@@ -2244,6 +2463,10 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     MPrev = M16Prev;
     doLoop01Iteration(MP, MPrev, nuMax, 3);
 
+#if MERTENSHURST_S1_Q210_PAIRED_SEAM
+    releaseVector(s1Q210PairTasks);
+#endif
+
 #undef M16BITMAX
 #undef MFRAC
 
@@ -2435,6 +2658,17 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                                   ? "full-Q210 guard"
                                   : "Q210 not selected")
                       << std::endl;
+        }
+#endif
+#if MERTENSHURST_S1_Q210_PAIRED_SEAM
+        std::cout << "Q210 paired S1 seam: "
+                  << (useS1Q210PairedSeam
+                          ? "active (Loop 0/1 only)"
+                          : "native Q30 fallback")
+                  << std::endl;
+        if (useS1Q210PairedSeam) {
+            std::cout << "  paired native-Q30 rows: "
+                      << s1Q210PairCount << std::endl;
         }
 #endif
         std::cout << std::endl;

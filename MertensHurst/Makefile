@@ -47,6 +47,8 @@ Q6_ZERO_COMPLETION_VALIDATE ?= 0
 Q6_COMPACT_HOT_STATE ?= 0
 Q30_COUPLED ?= 0
 Q210_COUPLED ?= 0
+S1_Q210_PAIRED_SEAM ?= 0
+S1_Q210_PAIRED_SEAM_VALIDATE ?= 0
 
 # --- Base flags (all platforms) ---
 CXXFLAGS := -O3 -std=c++17 \
@@ -71,7 +73,9 @@ CXXFLAGS := -O3 -std=c++17 \
             -DMERTENSHURST_Q6_ZERO_COMPLETION_VALIDATE=$(Q6_ZERO_COMPLETION_VALIDATE) \
             -DMERTENSHURST_Q6_COMPACT_HOT_STATE=$(Q6_COMPACT_HOT_STATE) \
             -DMERTENSHURST_Q30_COUPLED=$(Q30_COUPLED) \
-            -DMERTENSHURST_Q210_COUPLED=$(Q210_COUPLED)
+            -DMERTENSHURST_Q210_COUPLED=$(Q210_COUPLED) \
+            -DMERTENSHURST_S1_Q210_PAIRED_SEAM=$(S1_Q210_PAIRED_SEAM) \
+            -DMERTENSHURST_S1_Q210_PAIRED_SEAM_VALIDATE=$(S1_Q210_PAIRED_SEAM_VALIDATE)
 
 # Extra defines, e.g. make EXTRA_CXXFLAGS="-DSIEVE_LP_SIZE=1024 -DSIEVE_STRIDE_LOG=7"
 CXXFLAGS += $(EXTRA_CXXFLAGS)
@@ -103,7 +107,11 @@ CONTRACT_FILTERS = -DMERTENSHURST_FULL_RECOVERY=% \
                    -DMERTENSHURST_Q30_COUPLED=% \
                    -DMERTENSHURST_Q30_COUPLED -UMERTENSHURST_Q30_COUPLED \
                    -DMERTENSHURST_Q210_COUPLED=% \
-                   -DMERTENSHURST_Q210_COUPLED -UMERTENSHURST_Q210_COUPLED
+                   -DMERTENSHURST_Q210_COUPLED -UMERTENSHURST_Q210_COUPLED \
+                   -DMERTENSHURST_S1_Q210_PAIRED_SEAM=% \
+                   -DMERTENSHURST_S1_Q210_PAIRED_SEAM -UMERTENSHURST_S1_Q210_PAIRED_SEAM \
+                   -DMERTENSHURST_S1_Q210_PAIRED_SEAM_VALIDATE=% \
+                   -DMERTENSHURST_S1_Q210_PAIRED_SEAM_VALIDATE -UMERTENSHURST_S1_Q210_PAIRED_SEAM_VALIDATE
 FIXED_BASE_CXXFLAGS = $(filter-out $(CONTRACT_FILTERS),$(CXXFLAGS))
 
 Q2_CXXFLAGS = $(FIXED_BASE_CXXFLAGS) \
@@ -264,6 +272,24 @@ Q210_VALIDATE_CXXFLAGS = $(FIXED_BASE_CXXFLAGS) \
 Q210_SANITIZE_CXXFLAGS = $(filter-out -O3 -flto -DNDEBUG,$(Q210_VALIDATE_CXXFLAGS)) \
                          -O1 -g -fsanitize=address,undefined \
                          -fno-omit-frame-pointer
+
+S1_Q210_PAIRED_SEAM_CXXFLAGS = $(Q30_CXXFLAGS) \
+                                -DMERTENSHURST_Q210_COUPLED=0 \
+                                -DMERTENSHURST_S1_Q210_PAIRED_SEAM=1 \
+                                -DMERTENSHURST_S1_Q210_PAIRED_SEAM_VALIDATE=0
+S1_Q210_PAIRED_SEAM_VALIDATE_CXXFLAGS = $(filter-out \
+                                            -DMERTENSHURST_VALIDATE_UNORDERED_S2=% \
+                                            -DMERTENSHURST_VALIDATE_UNORDERED_S2_WIDE=% \
+                                            -DMERTENSHURST_Q6_ZERO_COMPLETION_VALIDATE=% \
+                                            -DMERTENSHURST_S1_Q210_PAIRED_SEAM_VALIDATE=%,$(S1_Q210_PAIRED_SEAM_CXXFLAGS)) \
+                                         -DMERTENSHURST_VALIDATE_UNORDERED_S2=1 \
+                                         -DMERTENSHURST_VALIDATE_UNORDERED_S2_WIDE=1 \
+                                         -DMERTENSHURST_Q6_ZERO_COMPLETION_VALIDATE=1 \
+                                         -DMERTENSHURST_S1_Q210_PAIRED_SEAM_VALIDATE=1
+S1_Q210_PAIRED_SEAM_SANITIZE_CXXFLAGS = $(filter-out \
+                                            -O3 -flto -DNDEBUG,$(S1_Q210_PAIRED_SEAM_VALIDATE_CXXFLAGS)) \
+                                         -O1 -g -fsanitize=address,undefined \
+                                         -fno-omit-frame-pointer
 LDFLAGS  :=
 
 # --- Platform-specific: OpenMP ---
@@ -284,6 +310,8 @@ SRCS     = $(SRCDIR)/MertensHurst.cpp $(SIEVEDIR)/SegmentedMobiusSieve.cpp $(SRC
 .PHONY: all q2 s2-unordered q6-zero-complete q6-zero-complete-validate \
         optimized optimized-validate q30-coupled q30-coupled-validate \
         q210-coupled q210-coupled-validate q210-coupled-sanitize \
+        q210-s1-paired-seam q210-s1-paired-seam-validate \
+        q210-s1-paired-seam-sanitize \
         full-recovery clean
 
 all: $(BUILDDIR)/mertens
@@ -309,6 +337,12 @@ q210-coupled: $(BUILDDIR)/mertens_q210_coupled
 q210-coupled-validate: $(BUILDDIR)/mertens_q210_coupled_validate
 
 q210-coupled-sanitize: $(BUILDDIR)/mertens_q210_coupled_sanitize
+
+q210-s1-paired-seam: $(BUILDDIR)/mertens_q210_s1_paired_seam
+
+q210-s1-paired-seam-validate: $(BUILDDIR)/mertens_q210_s1_paired_seam_validate
+
+q210-s1-paired-seam-sanitize: $(BUILDDIR)/mertens_q210_s1_paired_seam_sanitize
 
 full-recovery: $(BUILDDIR)/mertens_full_recovery
 
@@ -359,6 +393,18 @@ $(BUILDDIR)/mertens_q210_coupled_validate: Makefile $(SRCS) $(wildcard $(SRCDIR)
 $(BUILDDIR)/mertens_q210_coupled_sanitize: Makefile $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
 	@mkdir -p $(BUILDDIR)
 	$(CXX) $(Q210_SANITIZE_CXXFLAGS) $(SRCS) -o $@ $(LDFLAGS) -fsanitize=address,undefined
+
+$(BUILDDIR)/mertens_q210_s1_paired_seam: Makefile $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
+	@mkdir -p $(BUILDDIR)
+	$(CXX) $(S1_Q210_PAIRED_SEAM_CXXFLAGS) $(SRCS) -o $@ $(LDFLAGS)
+
+$(BUILDDIR)/mertens_q210_s1_paired_seam_validate: Makefile $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
+	@mkdir -p $(BUILDDIR)
+	$(CXX) $(S1_Q210_PAIRED_SEAM_VALIDATE_CXXFLAGS) $(SRCS) -o $@ $(LDFLAGS)
+
+$(BUILDDIR)/mertens_q210_s1_paired_seam_sanitize: Makefile $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
+	@mkdir -p $(BUILDDIR)
+	$(CXX) $(S1_Q210_PAIRED_SEAM_SANITIZE_CXXFLAGS) $(SRCS) -o $@ $(LDFLAGS) -fsanitize=address,undefined
 
 $(BUILDDIR)/mertens_full_recovery: Makefile $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
 	@mkdir -p $(BUILDDIR)
