@@ -1192,10 +1192,21 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 if (wide) {
 #if MERTENSHURST_Q210_COUPLED
                     if (useQ210Coupled) {
-                        const UInt128 quotient = q6PartialArgs128[bi] / b;
-                        wideDiagonal = CoherentS2Q210::evaluatePeriod(
-                            *q210PeriodTable, diagonalInner, quotient
-                        );
+                        const UInt128 numerator = q6PartialArgs128[bi];
+                        if (numerator <= std::numeric_limits<UInt64>::max()) {
+                            const UInt64 quotient =
+                                static_cast<UInt64>(numerator) / b;
+                            wideDiagonal = Int128(
+                                CoherentS2Q210::evaluatePeriod64(
+                                    *q210PeriodTable, diagonalInner, quotient
+                                )
+                            );
+                        } else {
+                            const UInt128 quotient = numerator / b;
+                            wideDiagonal = CoherentS2Q210::evaluatePeriod(
+                                *q210PeriodTable, diagonalInner, quotient
+                            );
+                        }
                     } else
 #endif
                     {
@@ -1404,22 +1415,50 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                     const std::size_t reverseMode = reverseInner;
                     if (wide) {
                         const UInt128 numerator = q6PartialArgs128[bi];
-                        for (UInt32 ai = cellBegin; ai < cellEnd; ++ai) {
-                            const UInt128 quotient = numerator / q6Bases[ai];
-                            const Int128 value = forward && reverse
-                                ? CoherentS2Q210::evaluatePairPeriod(
-                                    *q210PeriodTable, forwardMode,
-                                    reverseMode, quotient
-                                )
-                                : CoherentS2Q210::evaluatePeriod(
-                                    *q210PeriodTable,
-                                    forward ? forwardMode : reverseMode,
-                                    quotient
-                                );
-                            wideOffDiagonal += q6Signs[ai] < 0
-                                ? -value
-                                : value;
-                        }
+                        auto accumulateWideCell = [&](auto wideNumerator) {
+                            for (UInt32 ai = cellBegin; ai < cellEnd; ++ai) {
+                                const auto quotient =
+                                    wideNumerator / q6Bases[ai];
+                                if constexpr (std::is_same_v<
+                                                  decltype(wideNumerator),
+                                                  UInt64>) {
+                                    const Int64 value = forward && reverse
+                                        ? CoherentS2Q210::evaluatePairPeriod64(
+                                            *q210PeriodTable, forwardMode,
+                                            reverseMode, quotient
+                                        )
+                                        : CoherentS2Q210::evaluatePeriod64(
+                                            *q210PeriodTable,
+                                            forward ? forwardMode : reverseMode,
+                                            quotient
+                                        );
+                                    wideOffDiagonal += q6Signs[ai] < 0
+                                        ? -Int128(value)
+                                        : Int128(value);
+                                } else {
+                                    const Int128 value = forward && reverse
+                                        ? CoherentS2Q210::evaluatePairPeriod(
+                                            *q210PeriodTable, forwardMode,
+                                            reverseMode, quotient
+                                        )
+                                        : CoherentS2Q210::evaluatePeriod(
+                                            *q210PeriodTable,
+                                            forward ? forwardMode : reverseMode,
+                                            quotient
+                                        );
+                                    wideOffDiagonal += q6Signs[ai] < 0
+                                        ? -value
+                                        : value;
+                                }
+                            }
+                        };
+
+                        if (numerator <= std::numeric_limits<UInt64>::max())
+                            accumulateWideCell(
+                                static_cast<UInt64>(numerator)
+                            );
+                        else
+                            accumulateWideCell(numerator);
                     } else {
                         const UInt64 numerator = q6PartialArgs[bi];
                         auto accumulateCell = [&](auto&& quotientAt) {

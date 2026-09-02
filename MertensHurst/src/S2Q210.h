@@ -148,6 +148,24 @@ static_assert(sizeof(DensePeriodTable::remainders)
 static_assert(sizeof(DensePeriodTable) == 1411264,
               "coherent Q=210 dense table layout changed");
 
+static constexpr bool verifyUInt64EvaluatorRange() {
+    UInt64 maxSlope = 0;
+    for (Int16 slope : ExpectedSlopes) {
+        const UInt64 magnitude = slope < 0
+            ? static_cast<UInt64>(-static_cast<Int64>(slope))
+            : static_cast<UInt64>(slope);
+        maxSlope = std::max(maxSlope, magnitude);
+    }
+
+    const UInt128 blocks =
+        std::numeric_limits<UInt64>::max() / Period;
+    const UInt128 pairBound = UInt128(2) * maxSlope * blocks
+                            + UInt128(2) * (UInt64(1) << 15);
+    return pairBound <= UInt128(std::numeric_limits<Int64>::max());
+}
+static_assert(verifyUInt64EvaluatorRange(),
+              "Q210 UInt64 period evaluation must fit Int64");
+
 template<typename T>
 using Accumulator = Int128;
 
