@@ -4,11 +4,13 @@
 // S1Q210.h — completed outer-Q=210 S1 kernels.
 //
 // Completing the divisor group through 2*3*5*7 leaves the 48 residue classes
-// coprime to 210. Loop 0/1 traverse separate fixed-stride streams. Loop 2
-// interleaves the same predictor states in increasing denominator order.
+// coprime to 210. Exact ranges use an eight-lane quotient stepper in
+// denominator order. Predictor tails retain separate streams in Loop 0/1 and
+// interleave those streams in Loop 2.
 // ============================================================================
 
 #include "S1Q30.h"
+#include "QuotientStepper.h"
 
 #include <algorithm>
 #include <array>
@@ -18,6 +20,9 @@
 
 namespace S1Q210Detail {
 
+inline constexpr std::size_t StepperLanes = 8;
+using Stepper = QuotientStepper<StepperLanes>;
+
 inline constexpr std::array<UInt8, 48> Residues = {
       1,  11,  13,  17,  19,  23,  29,  31,
      37,  41,  43,  47,  53,  59,  61,  67,
@@ -26,6 +31,60 @@ inline constexpr std::array<UInt8, 48> Residues = {
     143, 149, 151, 157, 163, 167, 169, 173,
     179, 181, 187, 191, 193, 197, 199, 209
 };
+static_assert(Residues.size() % Stepper::Width == 0);
+
+inline constexpr std::size_t StepperGroups =
+    Residues.size() / Stepper::Width;
+
+inline constexpr std::array<
+    Stepper::Batch, StepperGroups
+> StepperDistances = [] {
+    std::array<Stepper::Batch, StepperGroups> distances{};
+    for (std::size_t group = 0; group < StepperGroups; ++group) {
+        const std::size_t previousGroup = group == 0
+            ? StepperGroups - 1
+            : group - 1;
+        for (std::size_t lane = 0; lane < Stepper::Width; ++lane) {
+            const UInt64 next = Residues[Stepper::Width * group + lane]
+                              + (group == 0 ? 210 : 0);
+            const UInt64 previous =
+                Residues[Stepper::Width * previousGroup + lane];
+            distances[group][lane] = next - previous;
+        }
+    }
+    return distances;
+}();
+
+static constexpr UInt64 stepperMaximumDistance() {
+    UInt64 maximum = 0;
+    for (const Stepper::Batch& distances : StepperDistances) {
+        for (UInt64 distance : distances)
+            maximum = std::max(maximum, distance);
+    }
+    return maximum;
+}
+
+inline constexpr UInt64 StepperMaximumDistance = stepperMaximumDistance();
+static_assert(StepperMaximumDistance == 40);
+
+template<typename TArg>
+static inline bool stepperSupportsRange(
+    const TArg& y,
+    UInt64 start,
+    UInt64 end
+) {
+    if (start > end) return false;
+    UInt64 fullBlock = start - start % 210;
+    if (fullBlock + 1 < start) {
+        if (fullBlock > std::numeric_limits<UInt64>::max() - 210)
+            return false;
+        fullBlock += 210;
+    }
+    return fullBlock <= end && end - fullBlock >= 209
+        && Stepper::supports(
+            y, fullBlock + Residues[0], StepperMaximumDistance
+        );
+}
 
 static constexpr bool verifyResidues() {
     std::size_t count = 0;
@@ -65,7 +124,7 @@ static inline bool firstResidueAtLeast(
 }
 
 template<typename TArg, typename MIntT>
-static inline S1Q6Detail::Accumulator<TArg> sumDirect(
+static inline S1Q6Detail::Accumulator<TArg> sumDirectScalar(
     const TArg& y,
     UInt64 L1,
     UInt64 start,
@@ -113,6 +172,117 @@ static inline S1Q6Detail::Accumulator<TArg> sumDirect(
     }
     if (block <= end) addClippedBlock(block);
     return result;
+}
+
+template<typename TArg, typename MIntT>
+static inline S1Q6Detail::Accumulator<TArg> sumDirectStepped(
+    const TArg& y,
+    UInt64 L1,
+    UInt64 start,
+    UInt64 end,
+    const MIntT* __restrict M,
+    const Int8* __restrict R,
+    const QuotientCache& qCache,
+    UInt64 dCAP
+) {
+    using Acc = S1Q6Detail::Accumulator<TArg>;
+    Acc result = 0;
+    if (start > end) return result;
+
+    if (!stepperSupportsRange(y, start, end)) {
+        return sumDirectScalar(
+            y, L1, start, end, M, R, qCache, dCAP
+        );
+    }
+
+    UInt64 block = start - start % 210;
+    UInt64 fullBlock = block;
+    if (fullBlock + 1 < start) fullBlock += 210;
+
+    if (start < fullBlock) {
+        result += sumDirectScalar(
+            y, L1, start, std::min(end, fullBlock - 1),
+            M, R, qCache, dCAP
+        );
+    }
+
+    auto denominators = [](UInt64 base, std::size_t group) {
+        Stepper::Batch values;
+        for (std::size_t lane = 0; lane < Stepper::Width; ++lane)
+            values[lane] = base + Residues[Stepper::Width * group + lane];
+        return values;
+    };
+    auto add = [&](const Stepper::Batch& quotients) {
+        for (UInt64 quotient : quotients)
+            result += static_cast<Acc>(GET_M(M, R, L1, quotient));
+    };
+
+    Stepper stepper;
+    add(stepper.initialize(y, denominators(fullBlock, 0)));
+    for (std::size_t group = 1; group < StepperGroups; ++group) {
+        add(stepper.step(
+            denominators(fullBlock, group), StepperDistances[group]
+        ));
+    }
+
+    block = fullBlock;
+    for (;;) {
+        if (std::numeric_limits<UInt64>::max() - block < 210)
+            return result;
+        block += 210;
+        if (block > end || end - block < 209) break;
+        for (std::size_t group = 0; group < StepperGroups; ++group) {
+            add(stepper.step(
+                denominators(block, group), StepperDistances[group]
+            ));
+        }
+    }
+
+    if (block <= end) {
+        result += sumDirectScalar(
+            y, L1, block, end, M, R, qCache, dCAP
+        );
+    }
+    return result;
+}
+
+template<typename TArg, typename MIntT>
+static inline S1Q6Detail::Accumulator<TArg> sumDirect(
+    const TArg& y,
+    UInt64 L1,
+    UInt64 start,
+    UInt64 end,
+    const MIntT* __restrict M,
+    const Int8* __restrict R,
+    const QuotientCache& qCache,
+    UInt64 dCAP
+) {
+    using Acc = S1Q6Detail::Accumulator<TArg>;
+
+    if constexpr (std::is_same_v<TArg, UInt64> && !UseDivisionFree) {
+        return sumDirectScalar(
+            y, L1, start, end, M, R, qCache, dCAP
+        );
+    } else if constexpr (std::is_same_v<TArg, UInt64>) {
+        Acc result = 0;
+        const UInt64 cacheEnd = std::min(end, dCAP);
+        if (start <= cacheEnd) {
+            result += sumDirectScalar(
+                y, L1, start, cacheEnd, M, R, qCache, dCAP
+            );
+        }
+        if (cacheEnd == end) return result;
+
+        const UInt64 steppedStart = std::max(start, cacheEnd + 1);
+        result += sumDirectStepped(
+            y, L1, steppedStart, end, M, R, qCache, dCAP
+        );
+        return result;
+    } else {
+        return sumDirectStepped(
+            y, L1, start, end, M, R, qCache, dCAP
+        );
+    }
 }
 
 template<typename TArg, typename MIntT>
@@ -265,6 +435,11 @@ static inline S1Q6Detail::Accumulator<TArg> sumCoprime210(
 
     if constexpr (std::is_same_v<TArg, UInt64> && !UseDivisionFree) {
         return sumDirect(y, L1, lo, hi, M, R, qCache, dCAP);
+    }
+
+    if constexpr (std::is_same_v<TArg, UInt128> && !UseDivisionFree) {
+        if (stepperSupportsRange(y, lo, hi))
+            return sumDirect(y, L1, lo, hi, M, R, qCache, dCAP);
     }
 
     UInt64 exactThrough = S1Q6Detail::sparsePredictorBoundary<210>(

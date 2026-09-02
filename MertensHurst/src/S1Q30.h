@@ -4,12 +4,13 @@
 // S1Q30.h — completed outer-Q=30 S1 kernels.
 //
 // With one common split, a completed divisor group leaves exactly the eight
-// residue classes coprime to 30.  Loop 0/1 retain independent fixed-stride
-// streams.  Loop 2 interleaves the same eight predictor states so the Mertens
-// table is visited in increasing denominator order.
+// residue classes coprime to 30. Exact ranges use an eight-lane quotient
+// stepper in denominator order. Predictor tails retain independent streams in
+// Loop 0/1 and interleave those streams in Loop 2.
 // ============================================================================
 
 #include "S1Q6.h"
+#include "QuotientStepper.h"
 
 #include <algorithm>
 #include <array>
@@ -18,16 +19,41 @@
 
 namespace S1Q30Detail {
 
+inline constexpr std::size_t StepperLanes = 8;
+using Stepper = QuotientStepper<StepperLanes>;
+inline constexpr UInt64 StepperSpan = 30;
+
 inline constexpr std::array<UInt64, 8> Residues = {
     1, 7, 11, 13, 17, 19, 23, 29
 };
+static_assert(Stepper::Width == Residues.size());
 
 static inline bool wheelAccepts(UInt64 value) {
     return (value & 1ULL) != 0 && value % 3 != 0 && value % 5 != 0;
 }
 
+template<typename TArg>
+static inline bool stepperSupportsRange(
+    const TArg& y,
+    UInt64 start,
+    UInt64 end
+) {
+    if (start > end) return false;
+    UInt64 fullBlock = start - start % 30;
+    if (fullBlock + 1 < start) {
+        if (fullBlock > std::numeric_limits<UInt64>::max() - 30)
+            return false;
+        fullBlock += 30;
+    }
+    return fullBlock <= end
+        && end - fullBlock >= 2 * StepperSpan - 1
+        && Stepper::supports(
+            y, fullBlock + Residues[0], StepperSpan
+        );
+}
+
 template<typename TArg, typename MIntT>
-static inline S1Q6Detail::Accumulator<TArg> sumDirect(
+static inline S1Q6Detail::Accumulator<TArg> sumDirectScalar(
     const TArg& y,
     UInt64 L1,
     UInt64 start,
@@ -71,6 +97,106 @@ static inline S1Q6Detail::Accumulator<TArg> sumDirect(
         }
     }
     return result;
+}
+
+template<typename TArg, typename MIntT>
+static inline S1Q6Detail::Accumulator<TArg> sumDirectStepped(
+    const TArg& y,
+    UInt64 L1,
+    UInt64 start,
+    UInt64 end,
+    const MIntT* __restrict M,
+    const Int8* __restrict R,
+    const QuotientCache& qCache,
+    UInt64 dCAP
+) {
+    using Acc = S1Q6Detail::Accumulator<TArg>;
+    Acc result = 0;
+    if (start > end) return result;
+
+    if (!stepperSupportsRange(y, start, end)) {
+        return sumDirectScalar(
+            y, L1, start, end, M, R, qCache, dCAP
+        );
+    }
+
+    UInt64 block = start - start % 30;
+    UInt64 fullBlock = block;
+    if (fullBlock + 1 < start) fullBlock += 30;
+
+    if (start < fullBlock) {
+        result += sumDirectScalar(
+            y, L1, start, std::min(end, fullBlock - 1),
+            M, R, qCache, dCAP
+        );
+    }
+
+    auto denominators = [](UInt64 base) {
+        Stepper::Batch values;
+        for (std::size_t lane = 0; lane < Stepper::Width; ++lane)
+            values[lane] = base + Residues[lane];
+        return values;
+    };
+    auto add = [&](const Stepper::Batch& quotients) {
+        for (UInt64 quotient : quotients)
+            result += static_cast<Acc>(GET_M(M, R, L1, quotient));
+    };
+
+    Stepper stepper;
+    add(stepper.initialize(y, denominators(fullBlock)));
+    block = fullBlock + StepperSpan;
+    while (block <= end && end - block >= StepperSpan - 1) {
+        add(stepper.step<StepperSpan>(denominators(block)));
+        if (std::numeric_limits<UInt64>::max() - block < StepperSpan)
+            return result;
+        block += StepperSpan;
+    }
+
+    if (block <= end) {
+        result += sumDirectScalar(
+            y, L1, block, end, M, R, qCache, dCAP
+        );
+    }
+    return result;
+}
+
+template<typename TArg, typename MIntT>
+static inline S1Q6Detail::Accumulator<TArg> sumDirect(
+    const TArg& y,
+    UInt64 L1,
+    UInt64 start,
+    UInt64 end,
+    const MIntT* __restrict M,
+    const Int8* __restrict R,
+    const QuotientCache& qCache,
+    UInt64 dCAP
+) {
+    using Acc = S1Q6Detail::Accumulator<TArg>;
+
+    if constexpr (std::is_same_v<TArg, UInt64> && !UseDivisionFree) {
+        return sumDirectScalar(
+            y, L1, start, end, M, R, qCache, dCAP
+        );
+    } else if constexpr (std::is_same_v<TArg, UInt64>) {
+        Acc result = 0;
+        const UInt64 cacheEnd = std::min(end, dCAP);
+        if (start <= cacheEnd) {
+            result += sumDirectScalar(
+                y, L1, start, cacheEnd, M, R, qCache, dCAP
+            );
+        }
+        if (cacheEnd == end) return result;
+
+        const UInt64 steppedStart = std::max(start, cacheEnd + 1);
+        result += sumDirectStepped(
+            y, L1, steppedStart, end, M, R, qCache, dCAP
+        );
+        return result;
+    } else {
+        return sumDirectStepped(
+            y, L1, start, end, M, R, qCache, dCAP
+        );
+    }
 }
 
 template<typename TArg, typename MIntT>
@@ -198,16 +324,15 @@ static inline S1Q6Detail::Accumulator<TArg> sumCoprime30(
         return sumDirect(y, L1, lo, hi, M, R, qCache, dCAP);
     }
 
+    if constexpr (std::is_same_v<TArg, UInt128> && !UseDivisionFree) {
+        if (stepperSupportsRange(y, lo, hi))
+            return sumDirect(y, L1, lo, hi, M, R, qCache, dCAP);
+    }
+
     const UInt64 firstUnitCurvature =
         S1Q6Detail::sparsePredictorBoundary<30>(y, lo, hi, dCAP);
     if (firstUnitCurvature == 0)
         return sumDirect(y, L1, lo, hi, M, R, qCache, dCAP);
-
-    if (!interleavePredictors) {
-        return sumSequentialPredicted(
-            y, L1, lo, hi, M, R, qCache, dCAP, firstUnitCurvature
-        );
-    }
 
     UInt64 exactThrough = firstUnitCurvature;
     if constexpr (std::is_same_v<TArg, UInt64> && UseDivisionFree)
@@ -219,9 +344,16 @@ static inline S1Q6Detail::Accumulator<TArg> sumCoprime30(
     );
     if (exactThrough == hi) return result;
     const UInt64 predictedLo = exactThrough + 1;
-    result += sumInterleavedPredicted(
-        y, L1, predictedLo, hi, M, R, qCache, dCAP
-    );
+    if (interleavePredictors) {
+        result += sumInterleavedPredicted(
+            y, L1, predictedLo, hi, M, R, qCache, dCAP
+        );
+    } else {
+        result += sumSequentialPredicted(
+            y, L1, predictedLo, hi,
+            M, R, qCache, dCAP, firstUnitCurvature
+        );
+    }
     return result;
 }
 

@@ -300,7 +300,9 @@ static inline Accumulator<TArg> sumClippedStream(
         if constexpr (std::is_same_v<TArg, UInt128>) {
             UInt64 qPrev = 0;
             UInt64 qCur = 0;
-            return update_S1_128<parity>(y, L1, lo, hi, M, R, qPrev, qCur);
+            return update_S1_128<parity, S1QuotientPolicy::Legacy>(
+                y, L1, lo, hi, M, R, qPrev, qCur
+            );
         } else {
             return update_S1<parity>(y, L1, lo, hi, M, R, qCache, dCAP);
         }

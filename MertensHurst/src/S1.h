@@ -11,7 +11,8 @@
 //   64-bit  (update_S1):      for most of the computation
 //   128-bit (update_S1_128):  for the largest arguments
 //
-// The 128-bit path splits into small (division) and fast (predictor) ranges.
+// The Q2 128-bit path uses the quotient stepper where supported. Its exact
+// fallback retains the small-division and fast-predictor ranges.
 //
 // Parity modes (ParityMode::All, Even, Odd) control which x values to sum
 // over, exploiting the inclusion-exclusion parity structure.
@@ -20,10 +21,86 @@
 #include "types.h"
 #include "QuotientCache.h"
 #include "QuotientPredictor.h"
+#include "QuotientStepper.h"
 #include "SegmentedMertensSieve.h"
 #include <algorithm>
 #include <cmath>
 #include <type_traits>
+
+enum class S1QuotientPolicy : UInt8 {
+    Legacy,
+    Stepper,
+};
+
+inline constexpr std::size_t Q2StepperLanes = 16;
+
+template <ParityMode Mode, typename MIntT>
+static inline bool sum_S1_128_stepped(
+    const UInt128& n,
+    UInt64 L1,
+    UInt64 from,
+    UInt64 to,
+    const MIntT* __restrict M,
+    const Int8* __restrict R,
+    Int128& sum
+) {
+    constexpr UInt64 Step = Mode == ParityMode::All ? 1 : 2;
+    using Stepper = QuotientStepper<Q2StepperLanes>;
+
+    UInt64 first = from;
+    if constexpr (Mode == ParityMode::Odd)
+        first |= 1ULL;
+    else if constexpr (Mode == ParityMode::Even)
+        first = (first + 1) & ~1ULL;
+
+    if (first > to) {
+        sum = 0;
+        return true;
+    }
+
+    const UInt64 count = (to - first) / Step + 1;
+    if (count < 2 * Stepper::Width
+        || !Stepper::supports(n, first, Step * Stepper::Width))
+        return false;
+
+    auto denominators = [](UInt64 base) {
+        Stepper::Batch values;
+        for (std::size_t lane = 0; lane < Stepper::Width; ++lane)
+            values[lane] = base + Step * lane;
+        return values;
+    };
+    auto add = [&](Int128& result, const Stepper::Batch& quotients) {
+        for (UInt64 quotient : quotients)
+            result += static_cast<Int128>(GET_M(M, R, L1, quotient));
+    };
+    auto scalar = [&](UInt64 begin, UInt64 finish) {
+        Int128 result = 0;
+        for (UInt64 denominator = begin;; denominator += Step) {
+            const UInt64 quotient = static_cast<UInt64>(n / denominator);
+            result += static_cast<Int128>(GET_M(M, R, L1, quotient));
+            if (finish - denominator < Step) break;
+        }
+        return result;
+    };
+
+    Int128 result = 0;
+    Stepper stepper;
+    add(result, stepper.initialize(n, denominators(first)));
+
+    UInt64 consumed = Stepper::Width;
+    while (count - consumed >= Stepper::Width) {
+        const UInt64 base = first + Step * consumed;
+        add(result, stepper.step<Step * Stepper::Width>(
+            denominators(base)
+        ));
+        consumed += Stepper::Width;
+    }
+    if (consumed < count)
+        result += scalar(first + Step * consumed, to);
+
+    sum = result;
+    return true;
+}
 
 // ============================================================================
 // 128-bit S1: fast range using quotient predictor
@@ -117,16 +194,27 @@ static inline void sum_fast_range2(
 }
 
 // ============================================================================
-// 128-bit S1: top-level segmented routine (small + fast range)
+// 128-bit S1: top-level segmented routine
 // ============================================================================
 
-template <ParityMode Mode, typename MIntT>
+template <ParityMode Mode, S1QuotientPolicy Policy, typename MIntT>
 static inline Int128 update_S1_128(
     UInt128 n, UInt64 L1, UInt64 start, UInt64 end,
     const MIntT* __restrict M, const Int8* __restrict R,
     UInt64& qPrev, UInt64& qCur
 ) {
     if (__builtin_expect(end < start, false)) return 0;
+
+    if constexpr (Policy == S1QuotientPolicy::Stepper && !UseDivisionFree) {
+        Int128 stepped = 0;
+        if (sum_S1_128_stepped<Mode>(
+                n, L1, start, end, M, R, stepped
+            )) {
+            qPrev = 0;
+            qCur = 0;
+            return stepped;
+        }
+    }
 
     Int128 sum = 0;
 
@@ -136,20 +224,31 @@ static inline Int128 update_S1_128(
     // Small region: real division, can skip by parity
     const UInt64 smallTo = std::min(end, cbrt2nCeil);
     if (start <= smallTo) {
-        if constexpr (Mode == ParityMode::All) {
-            #pragma clang loop unroll_count(4)
-            for (UInt64 x = start; x <= smallTo; ++x) {
-                sum += static_cast<Int128>(GET_M(M, R, L1, static_cast<UInt64>(n / x)));
-            }
-        } else if constexpr (Mode == ParityMode::Odd) {
-            #pragma clang loop unroll_count(4)
-            for (UInt64 x = start | 1ULL; x <= smallTo; x += 2) {
-                sum += static_cast<Int128>(GET_M(M, R, L1, static_cast<UInt64>(n / x)));
-            }
-        } else {
-            #pragma clang loop unroll_count(4)
-            for (UInt64 x = (start + 1) & ~1ULL; x <= smallTo; x += 2) {
-                sum += static_cast<Int128>(GET_M(M, R, L1, static_cast<UInt64>(n / x)));
+        bool usedStepper = false;
+        if constexpr (Policy == S1QuotientPolicy::Stepper && UseDivisionFree) {
+            Int128 stepped = 0;
+            usedStepper = sum_S1_128_stepped<Mode>(
+                n, L1, start, smallTo, M, R, stepped
+            );
+            if (usedStepper) sum += stepped;
+        }
+
+        if (!usedStepper) {
+            if constexpr (Mode == ParityMode::All) {
+                #pragma clang loop unroll_count(4)
+                for (UInt64 x = start; x <= smallTo; ++x) {
+                    sum += static_cast<Int128>(GET_M(M, R, L1, static_cast<UInt64>(n / x)));
+                }
+            } else if constexpr (Mode == ParityMode::Odd) {
+                #pragma clang loop unroll_count(4)
+                for (UInt64 x = start | 1ULL; x <= smallTo; x += 2) {
+                    sum += static_cast<Int128>(GET_M(M, R, L1, static_cast<UInt64>(n / x)));
+                }
+            } else {
+                #pragma clang loop unroll_count(4)
+                for (UInt64 x = (start + 1) & ~1ULL; x <= smallTo; x += 2) {
+                    sum += static_cast<Int128>(GET_M(M, R, L1, static_cast<UInt64>(n / x)));
+                }
             }
         }
     }
@@ -158,6 +257,9 @@ static inline Int128 update_S1_128(
     const UInt64 fastFrom = std::max(start, cbrt2nCeil + 1);
     if (fastFrom <= end) {
         sum_fast_range2<Mode>(n, M, R, L1, fastFrom, end, sum, qPrev, qCur);
+    } else if constexpr (Policy == S1QuotientPolicy::Stepper) {
+        qPrev = 0;
+        qCur = 0;
     }
 
     return sum;
@@ -282,7 +384,9 @@ static inline void apply_S1_updates(
 
         if (lo <= hi) {
             if constexpr (std::is_same_v<TArg, UInt128>)
-                partialValue -= update_S1_128<ParityMode::All>(
+                partialValue -= update_S1_128<
+                    ParityMode::All, S1QuotientPolicy::Stepper
+                >(
                     partialArg, L1, lo, hi, M, R, *qPrev_odd, *qCur_odd);
             else
                 partialValue -= update_S1<ParityMode::All>(
@@ -294,7 +398,9 @@ static inline void apply_S1_updates(
 
         if (loOdd <= hiOdd) {
             if constexpr (std::is_same_v<TArg, UInt128>)
-                partialValue -= update_S1_128<ParityMode::Odd>(
+                partialValue -= update_S1_128<
+                    ParityMode::Odd, S1QuotientPolicy::Stepper
+                >(
                     partialArg, L1, loOdd, hiOdd, M, R, *qPrev_odd, *qCur_odd);
             else
                 partialValue -= update_S1<ParityMode::Odd>(
@@ -306,7 +412,9 @@ static inline void apply_S1_updates(
 
         if (loEven <= hiEven) {
             if constexpr (std::is_same_v<TArg, UInt128>)
-                partialValue += update_S1_128<ParityMode::Even>(
+                partialValue += update_S1_128<
+                    ParityMode::Even, S1QuotientPolicy::Stepper
+                >(
                     partialArg, L1, loEven, hiEven, M, R, *qPrev_even, *qCur_even);
             else
                 partialValue += update_S1<ParityMode::Even>(
