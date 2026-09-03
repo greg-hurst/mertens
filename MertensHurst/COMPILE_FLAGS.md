@@ -25,9 +25,18 @@ assertions in `MertensHurst.cpp`.
 `make q30-coupled` and `make q210-coupled` are likewise contract-closed named
 profiles. Q210 requires the complete Q30 profile beneath it. Its shared guard
 is evaluated before Q210 worklist filtering or table allocation; a failed
-guard retains one coherent Q30 invocation. `make q210-coupled-validate` enables
-the ordered-square comparator, while `make q210-coupled-sanitize` builds the
-same profile with AddressSanitizer and UndefinedBehaviorSanitizer.
+guard retains one coherent Q30 invocation.
+
+The `q210-coupled` profile enables the exact factor-11/factor-13 $S_1$
+hierarchy in Loops 0 and 1. Its temporary masks and monotone child maps retain
+$O(n/u)$ space and use about 249 MB at $10^{25}$; they are released before
+Loop 2. `make q210-coupled-native` emits the pre-hierarchy baseline.
+`make q210-coupled-validate` enables both the ladder's per-segment native
+comparison and the ordered-square comparator, while
+`make q210-coupled-sanitize` builds that validation profile with
+AddressSanitizer and UndefinedBehaviorSanitizer.
+`make q210-coupled-fallback` forces the Q210-to-Q30 runtime fallback in the
+same validation profile.
 
 The MertensHurst Makefile names its narrow-entry setting `SIEVE_BUCKET_NARROW_ENTRY`; the standalone sieve Makefile names the corresponding setting `NARROW_ENTRY`. Both produce the compiler define `SIEVE_NARROW_ENTRY`.
 

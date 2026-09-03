@@ -103,7 +103,13 @@ CONTRACT_FILTERS = -DMERTENSHURST_FULL_RECOVERY=% \
                    -DMERTENSHURST_Q30_COUPLED=% \
                    -DMERTENSHURST_Q30_COUPLED -UMERTENSHURST_Q30_COUPLED \
                    -DMERTENSHURST_Q210_COUPLED=% \
-                   -DMERTENSHURST_Q210_COUPLED -UMERTENSHURST_Q210_COUPLED
+                   -DMERTENSHURST_Q210_COUPLED -UMERTENSHURST_Q210_COUPLED \
+                   -DMERTENSHURST_S1_Q30030_LADDER=% \
+                   -DMERTENSHURST_S1_Q30030_LADDER -UMERTENSHURST_S1_Q30030_LADDER \
+                   -DMERTENSHURST_S1_Q30030_LADDER_VALIDATE=% \
+                   -DMERTENSHURST_S1_Q30030_LADDER_VALIDATE -UMERTENSHURST_S1_Q30030_LADDER_VALIDATE \
+                   -DMERTENSHURST_S1_Q30030_FORCE_Q210_FALLBACK=% \
+                   -DMERTENSHURST_S1_Q30030_FORCE_Q210_FALLBACK -UMERTENSHURST_S1_Q30030_FORCE_Q210_FALLBACK
 FIXED_BASE_CXXFLAGS = $(filter-out $(CONTRACT_FILTERS),$(CXXFLAGS))
 
 Q2_CXXFLAGS = $(FIXED_BASE_CXXFLAGS) \
@@ -232,20 +238,22 @@ Q30_VALIDATE_CXXFLAGS = $(FIXED_BASE_CXXFLAGS) \
                         -DMERTENSHURST_Q6_COMPACT_HOT_STATE=1 \
                         -DMERTENSHURST_Q30_COUPLED=1
 
-Q210_CXXFLAGS = $(FIXED_BASE_CXXFLAGS) \
-                -DMERTENSHURST_FULL_RECOVERY=0 \
-                -DMERTENSHURST_S1_OUTER_Q6=1 \
-                -DMERTENSHURST_S2_OUTER_Q6=1 \
-                -DMERTENSHURST_COHERENT_Q6=1 \
-                -DMERTENSHURST_COHERENT_PERIOD36=1 \
-                -DMERTENSHURST_UNORDERED_S2=1 \
-                -DMERTENSHURST_VALIDATE_UNORDERED_S2=0 \
-                -DMERTENSHURST_VALIDATE_UNORDERED_S2_WIDE=0 \
-                -DMERTENSHURST_Q6_ZERO_COMPLETION=1 \
-                -DMERTENSHURST_Q6_ZERO_COMPLETION_VALIDATE=0 \
-                -DMERTENSHURST_Q6_COMPACT_HOT_STATE=1 \
-                -DMERTENSHURST_Q30_COUPLED=1 \
-                -DMERTENSHURST_Q210_COUPLED=1
+Q210_NATIVE_CXXFLAGS = $(FIXED_BASE_CXXFLAGS) \
+                       -DMERTENSHURST_FULL_RECOVERY=0 \
+                       -DMERTENSHURST_S1_OUTER_Q6=1 \
+                       -DMERTENSHURST_S2_OUTER_Q6=1 \
+                       -DMERTENSHURST_COHERENT_Q6=1 \
+                       -DMERTENSHURST_COHERENT_PERIOD36=1 \
+                       -DMERTENSHURST_UNORDERED_S2=1 \
+                       -DMERTENSHURST_VALIDATE_UNORDERED_S2=0 \
+                       -DMERTENSHURST_VALIDATE_UNORDERED_S2_WIDE=0 \
+                       -DMERTENSHURST_Q6_ZERO_COMPLETION=1 \
+                       -DMERTENSHURST_Q6_ZERO_COMPLETION_VALIDATE=0 \
+                       -DMERTENSHURST_Q6_COMPACT_HOT_STATE=1 \
+                       -DMERTENSHURST_Q30_COUPLED=1 \
+                       -DMERTENSHURST_Q210_COUPLED=1
+Q210_CXXFLAGS = $(Q210_NATIVE_CXXFLAGS) \
+                -DMERTENSHURST_S1_Q30030_LADDER=1
 
 Q210_VALIDATE_CXXFLAGS = $(FIXED_BASE_CXXFLAGS) \
                          -DMERTENSHURST_FULL_RECOVERY=0 \
@@ -260,10 +268,14 @@ Q210_VALIDATE_CXXFLAGS = $(FIXED_BASE_CXXFLAGS) \
                          -DMERTENSHURST_Q6_ZERO_COMPLETION_VALIDATE=1 \
                          -DMERTENSHURST_Q6_COMPACT_HOT_STATE=1 \
                          -DMERTENSHURST_Q30_COUPLED=1 \
-                         -DMERTENSHURST_Q210_COUPLED=1
+                         -DMERTENSHURST_Q210_COUPLED=1 \
+                         -DMERTENSHURST_S1_Q30030_LADDER=1 \
+                         -DMERTENSHURST_S1_Q30030_LADDER_VALIDATE=1
 Q210_SANITIZE_CXXFLAGS = $(filter-out -O3 -flto -DNDEBUG,$(Q210_VALIDATE_CXXFLAGS)) \
                          -O1 -g -fsanitize=address,undefined \
                          -fno-omit-frame-pointer
+Q210_FALLBACK_CXXFLAGS = $(Q210_VALIDATE_CXXFLAGS) \
+                         -DMERTENSHURST_S1_Q30030_FORCE_Q210_FALLBACK=1
 LDFLAGS  :=
 
 # --- Platform-specific: OpenMP ---
@@ -284,6 +296,7 @@ SRCS     = $(SRCDIR)/MertensHurst.cpp $(SIEVEDIR)/SegmentedMobiusSieve.cpp $(SRC
 .PHONY: all q2 s2-unordered q6-zero-complete q6-zero-complete-validate \
         optimized optimized-validate q30-coupled q30-coupled-validate \
         q210-coupled q210-coupled-validate q210-coupled-sanitize \
+        q210-coupled-native q210-coupled-fallback \
         full-recovery clean
 
 all: $(BUILDDIR)/mertens
@@ -309,6 +322,10 @@ q210-coupled: $(BUILDDIR)/mertens_q210_coupled
 q210-coupled-validate: $(BUILDDIR)/mertens_q210_coupled_validate
 
 q210-coupled-sanitize: $(BUILDDIR)/mertens_q210_coupled_sanitize
+
+q210-coupled-native: $(BUILDDIR)/mertens_q210_coupled_native
+
+q210-coupled-fallback: $(BUILDDIR)/mertens_q210_coupled_fallback
 
 full-recovery: $(BUILDDIR)/mertens_full_recovery
 
@@ -359,6 +376,15 @@ $(BUILDDIR)/mertens_q210_coupled_validate: Makefile $(SRCS) $(wildcard $(SRCDIR)
 $(BUILDDIR)/mertens_q210_coupled_sanitize: Makefile $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
 	@mkdir -p $(BUILDDIR)
 	$(CXX) $(Q210_SANITIZE_CXXFLAGS) $(SRCS) -o $@ $(LDFLAGS) -fsanitize=address,undefined
+
+$(BUILDDIR)/mertens_q210_coupled_native: Makefile $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
+	@mkdir -p $(BUILDDIR)/q210-coupled-native
+	$(CXX) $(Q210_NATIVE_CXXFLAGS) $(SRCS) -o $(BUILDDIR)/q210-coupled-native/mertens_q210_coupled $(LDFLAGS)
+	@cp $(BUILDDIR)/q210-coupled-native/mertens_q210_coupled $@
+
+$(BUILDDIR)/mertens_q210_coupled_fallback: Makefile $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
+	@mkdir -p $(BUILDDIR)
+	$(CXX) $(Q210_FALLBACK_CXXFLAGS) $(SRCS) -o $@ $(LDFLAGS)
 
 $(BUILDDIR)/mertens_full_recovery: Makefile $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
 	@mkdir -p $(BUILDDIR)

@@ -147,6 +147,23 @@ For the underlying Q2 stream, each $|M(q)| \le 0.571 \sqrt{q}$ empirically for $
 
 Note: Table 6.1 of Hurst 2016 verifies $|M(q)/\sqrt{q}| \le 0.571$ only up to $q = 10^{16}$. Extending beyond $n = 10^{25}$ pushes $u$ past $10^{16}$, so the table no longer directly covers all queried $M(q)$ values. However, the bounds above are already loose by orders of magnitude (they assume zero cancellation from $\mu$ signs), so even a modest increase in the empirical ratio should not threaten `Int64` overflow.
 
+The coupled-Q210 profile's selective factor-11/factor-13 ladder combines at
+most four completed-Q210 components in one narrow kernel result. If $K$ is
+the largest narrow common-$\kappa$, a conservative absolute bound is
+
+$$
+4 \cdot 48 \left\lceil\frac{K}{210}\right\rceil
+    (2^{31}+128).
+$$
+
+The implementation evaluates this bound in `UInt128` before allocating the
+ladder maps and falls back to native Q210 $S_1$ if it exceeds
+`INT64_MAX`. At `nuRatio=0.9`, $K \le 1\,111\,111\,111$ throughout
+the narrow $y \le 10^{18}$ path, so the bound is about
+$2.182 \times 10^{18}$, or 23.7% of `INT64_MAX`. The combined narrow
+destination update is independently formed in `Int128` and range-checked
+before storage.
+
 ### `partial_values[i]` running total
 
 Each `partial_values[i]` accumulates the transformed $S_2$ and $S_1$ contributions plus its initialization term across all sieve segments. The former $\approx 5.1x$ estimate combines Q2-only constants and is therefore not a proof for the current Q6 production path. In practice the intermediate values remain far below `Int64` limits in the supported-range stress tests; a rigorous production bound should combine the Q6 constants described above.

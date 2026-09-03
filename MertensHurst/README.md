@@ -24,7 +24,8 @@ make        # build the binary
 make q2     # build the original all-Q2 reference binary
 make s2-unordered  # build the coherent period-36/unordered-S2 profile
 make q30-coupled   # build the complete coupled Q=30 profile
-make q210-coupled  # build the complete coupled Q=210 profile
+make q210-coupled  # build the fastest complete Q=210 profile
+make q210-coupled-native  # build the pre-ladder Q=210 baseline
 make clean  # remove build artifacts
 ```
 
@@ -41,14 +42,31 @@ Its runtime interface and exact result are the same as `build/mertens`.
 The opt-in `q30-coupled` and `q210-coupled` targets extend that same exact
 stack through the square-free divisors of 30 and 210. Q=210 is selected only
 when one shared split is legal for the entire run; otherwise the whole run
-falls back to Q=30. It never mixes Q=30 and Q=210 rows. The Q=210 coefficient
-table occupies about 1.35 MiB and is released before Loop 2.
+falls back to Q=30. It never mixes Q=30 and Q=210 rows.
+
+The `q210-coupled` profile also groups eligible $S_1$ rows through 11 and 13.
+It uses $Q=2310$ and $Q=30030$ parent kernels with exact $Q=210$ seams, while
+preserving the original dynamic-per-row scheduler. Loop 2 stays native;
+wide Loop-1 roots use only the profitable factor-11 pairing. Two membership
+masks and two monotone child maps are temporary and released before Loop 2
+(about 249 MB at $10^{25}$). The Q=210 coefficient table occupies about
+1.35 MiB and is also released before Loop 2. Use `q210-coupled-native` for
+the exact pre-ladder baseline.
+
+Loop 0 groups every eligible factor-13 root; Loop 1 does so only when the
+root argument is at most $10^{18}$, leaving wider roots as two factor-11
+pairs. Within a full quartet, the hierarchical seam is selected only when
+the duplicated Q=210 interval
+$(\lfloor\kappa/143\rfloor,\lfloor\kappa_{13}/11\rfloor]$ contains a
+coprime-to-210 denominator in the current sieve segment. Otherwise the
+algebraically equivalent independent-Q210 seams avoid unnecessary traversal.
 
 The Q=210 profile has dedicated validation builds:
 
 ```
 make q210-coupled-validate      # ordered-square comparison enabled
 make q210-coupled-sanitize      # ASan and UBSan executable
+make q210-coupled-fallback      # validate a forced Q210-to-Q30 fallback
 ```
 
 ### Division-free mode
@@ -124,12 +142,15 @@ src/
   S1Q6.h                    Exact outer-Q6 S1 transform kernels
   S1Q30.h                   Completed outer-Q30 S1 kernels
   S1Q210.h                  Completed outer-Q210 S1 kernels
+  S1Q2310PairedSeam.h       Exact factor-11 paired S1 kernel
+  S1Q30030Ladder.h          Exact factor-11/factor-13 S1 ladder
   S2.h                      S2 summation functions (64-bit and 128-bit)
   S2Q6.h                    Exact outer-Q6 S2 dispatch
   S2Q6Modes.h               Static outer-Q6 S2 coefficient modes
   S2Q30.h                   Coupled Q30 S2 kernels
   S2Q210.h                  Coupled Q210 S2 kernels and period table
   OuterRecovery.h           Final-value inversion and optional full recovery
+  QuotientStepper.h         Exact batched quotient/remainder transport
   QuotientPredictor.h       Division-free quotient estimation
   main.cpp                  Driver program
 ../sieve/                   Shared segmented Mobius sieve (see sieve/README.md)

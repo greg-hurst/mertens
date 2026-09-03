@@ -6,6 +6,18 @@
 #define MERTENSHURST_Q210_COUPLED 0
 #endif
 
+#ifndef MERTENSHURST_S1_Q30030_LADDER
+#define MERTENSHURST_S1_Q30030_LADDER 0
+#endif
+
+#ifndef MERTENSHURST_S1_Q30030_LADDER_VALIDATE
+#define MERTENSHURST_S1_Q30030_LADDER_VALIDATE 0
+#endif
+
+#ifndef MERTENSHURST_S1_Q30030_FORCE_Q210_FALLBACK
+#define MERTENSHURST_S1_Q30030_FORCE_Q210_FALLBACK 0
+#endif
+
 #include "MertensHurst.h"
 #include "S2Q6.h"
 #include "S1.h"
@@ -17,6 +29,10 @@
 #if MERTENSHURST_Q210_COUPLED
 #include "S2Q210.h"
 #include "S1Q210.h"
+#if MERTENSHURST_S1_Q30030_LADDER
+#include "S1Q2310PairedSeam.h"
+#include "S1Q30030Ladder.h"
+#endif
 #include <memory>
 #endif
 #include "OuterRecovery.h"
@@ -35,6 +51,33 @@
 static constexpr bool UseS1OuterQ6 = MERTENSHURST_S1_OUTER_Q6;
 static_assert(MERTENSHURST_S1_OUTER_Q6 == 0 || MERTENSHURST_S1_OUTER_Q6 == 1,
               "MERTENSHURST_S1_OUTER_Q6 must be 0 or 1");
+
+#if MERTENSHURST_S1_Q30030_LADDER \
+    || MERTENSHURST_S1_Q30030_LADDER_VALIDATE \
+    || MERTENSHURST_S1_Q30030_FORCE_Q210_FALLBACK
+static constexpr bool UseS1Q30030Ladder =
+    MERTENSHURST_S1_Q30030_LADDER;
+static constexpr bool ValidateS1Q30030Ladder =
+    MERTENSHURST_S1_Q30030_LADDER_VALIDATE;
+static constexpr UInt64 S1Q30030NarrowArgumentMax =
+    1000000000000000000ULL;
+static_assert(MERTENSHURST_S1_Q30030_LADDER == 0
+              || MERTENSHURST_S1_Q30030_LADDER == 1,
+              "MERTENSHURST_S1_Q30030_LADDER must be 0 or 1");
+static_assert(MERTENSHURST_S1_Q30030_LADDER_VALIDATE == 0
+              || MERTENSHURST_S1_Q30030_LADDER_VALIDATE == 1,
+              "MERTENSHURST_S1_Q30030_LADDER_VALIDATE must be 0 or 1");
+static_assert(MERTENSHURST_S1_Q30030_FORCE_Q210_FALLBACK == 0
+              || MERTENSHURST_S1_Q30030_FORCE_Q210_FALLBACK == 1,
+              "MERTENSHURST_S1_Q30030_FORCE_Q210_FALLBACK must be 0 or 1");
+static_assert(!ValidateS1Q30030Ladder || UseS1Q30030Ladder,
+              "Q30030 ladder validation requires the ladder");
+static_assert(!UseS1Q30030Ladder || MERTENSHURST_Q210_COUPLED,
+              "Q30030 ladder requires the native Q210 contract");
+static_assert(!MERTENSHURST_S1_Q30030_FORCE_Q210_FALLBACK
+              || ValidateS1Q30030Ladder,
+              "forced Q210 fallback requires ladder validation");
+#endif
 
 #ifndef MERTENSHURST_S2_OUTER_Q6
 #define MERTENSHURST_S2_OUTER_Q6 1
@@ -120,6 +163,10 @@ static_assert(MERTENSHURST_Q6_COMPACT_HOT_STATE == 0
 static_assert(!UseQ6CompactHotState
               || (UseQ6ZeroCompletion && UseUnorderedS2),
               "compact Q6 state requires zero completion and unordered S2");
+#if MERTENSHURST_S1_Q30030_LADDER
+static_assert(UseQ6CompactHotState,
+              "Q30030 ladder requires compact Q6 hot state");
+#endif
 
 static constexpr bool UseQ30Coupled = MERTENSHURST_Q30_COUPLED;
 static_assert(MERTENSHURST_Q30_COUPLED == 0
@@ -514,6 +561,18 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     std::vector<UInt64> q6BoundaryFactor;
     std::vector<UInt32> q6Bases;
     std::vector<Int8> q6Signs;
+#if MERTENSHURST_S1_Q30030_LADDER
+    // Two membership masks and two dense monotone child maps give O(1)
+    // ownership decisions in the original per-row workshare. At 10^25 they
+    // occupy about 249 MB and are released before Loop 2.
+    std::vector<UInt64> s1P11ChildMask;
+    std::vector<UInt64> s1P13ChildMask;
+    std::vector<UInt32> s1P11ChildByParent;
+    std::vector<UInt32> s1P13ChildByRoot;
+    UInt64 s1P13NarrowChildBegin = 0;
+    bool useS1Q30030Ladder = false;
+    bool s1Q30030AccumulatorFallback = false;
+#endif
     std::vector<UInt64> s1Q6Kappa3;
     std::vector<UInt64> s1Q6Kappa6;
     std::vector<UInt64> s2Q6Nu3;
@@ -535,6 +594,9 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 #if MERTENSHURST_Q210_COUPLED
     bool useQ210Coupled = false;
     bool q210GuardFallback = false;
+#if MERTENSHURST_S1_Q30030_FORCE_Q210_FALLBACK
+    bool q210ForcedFallback = false;
+#endif
     std::unique_ptr<CoherentS2Q210::DensePeriodTable> q210PeriodTable;
 #endif
     if constexpr (UseS1OuterQ6) {
@@ -603,6 +665,12 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 }
             }
         }
+#if MERTENSHURST_S1_Q30030_FORCE_Q210_FALLBACK
+        if (useQ210Coupled) {
+            useQ210Coupled = false;
+            q210ForcedFallback = true;
+        }
+#endif
         if (useQ30Coupled) {
             s1Q6Worklist.erase(std::remove_if(
                 s1Q6Worklist.begin(), s1Q6Worklist.end(),
@@ -715,6 +783,269 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 q6Signs[workIndex] = negative ? -1 : 1;
             }
         }
+
+#if MERTENSHURST_S1_Q30030_LADDER
+        if constexpr (UseS1Q30030Ladder) {
+            if (useQ210Coupled) {
+                UInt64 maximumNarrowKappa = 0;
+                for (std::size_t workIndex = 0;
+                     workIndex < s1Q6Worklist.size();
+                     ++workIndex) {
+                    if (s1Q6Worklist[workIndex].compactIndex > cnt128) {
+                        maximumNarrowKappa = std::max(
+                            maximumNarrowKappa,
+                            q6CommonKappa[workIndex]
+                        );
+                    }
+                }
+                const UInt128 componentTerms =
+                    UInt128(48)
+                    * (maximumNarrowKappa / 210
+                       + (maximumNarrowKappa % 210 != 0));
+                const UInt128 narrowKernelBound =
+                    UInt128(4) * componentTerms
+                    * ((UInt128(1) << 31) + 128);
+                s1Q30030AccumulatorFallback =
+                    narrowKernelBound
+                    > UInt128(std::numeric_limits<Int64>::max());
+            }
+
+            if (useQ210Coupled && !s1Q30030AccumulatorFallback) {
+                constexpr UInt32 MissingChild =
+                    std::numeric_limits<UInt32>::max();
+                if (q6Bases.size()
+                    > std::numeric_limits<UInt32>::max()) {
+                    std::cerr
+                        << "Internal error: S1 ladder worklist exceeds "
+                           "UInt32 child-map storage."
+                        << std::endl;
+                    std::abort();
+                }
+
+                const std::size_t maskWords =
+                    q6Bases.size() / 64
+                    + (q6Bases.size() % 64 != 0);
+                s1P11ChildMask.assign(maskWords, 0);
+                s1P13ChildMask.assign(maskWords, 0);
+
+                auto mark = [](std::vector<UInt64>& mask,
+                               std::size_t index) {
+                    mask[index >> 6] |= UInt64(1) << (index & 63);
+                };
+                for (std::size_t workIndex = 0;
+                     workIndex < q6Bases.size();
+                     ++workIndex) {
+                    const UInt64 base = q6Bases[workIndex];
+                    if (base % 11 == 0)
+                        mark(s1P11ChildMask, workIndex);
+                    if (base % 13 == 0 && base % 11 != 0)
+                        mark(s1P13ChildMask, workIndex);
+                }
+
+                auto boundedBase = [](UInt64 value) {
+                    return static_cast<UInt32>(std::min(
+                        value,
+                        UInt64(std::numeric_limits<UInt32>::max())
+                    ));
+                };
+                const std::size_t p11ParentEnd = std::upper_bound(
+                    q6Bases.begin(), q6Bases.end(),
+                    boundedBase(nu / 11)
+                ) - q6Bases.begin();
+                const std::size_t p13RootEnd = std::upper_bound(
+                    q6Bases.begin(), q6Bases.end(),
+                    boundedBase(nu / 13)
+                ) - q6Bases.begin();
+                s1P11ChildByParent.assign(p11ParentEnd, MissingChild);
+                s1P13ChildByRoot.assign(p13RootEnd, MissingChild);
+
+                auto buildMonotoneMap = [&](
+                    std::vector<UInt32>& children,
+                    UInt64 prime,
+                    bool rejectEleven
+                ) {
+                    std::size_t childSearch = 0;
+                    for (std::size_t parent = 0;
+                         parent < children.size();
+                         ++parent) {
+                        const UInt64 base = q6Bases[parent];
+                        if (base % prime == 0
+                            || (rejectEleven && base % 11 == 0)) {
+                            continue;
+                        }
+                        if (base
+                            > std::numeric_limits<UInt64>::max()
+                                / prime) {
+                            std::cerr
+                                << "Internal error: S1 ladder child "
+                                   "overflow."
+                                << std::endl;
+                            std::abort();
+                        }
+                        const UInt64 target = base * prime;
+                        while (childSearch < q6Bases.size()
+                               && q6Bases[childSearch] < target) {
+                            ++childSearch;
+                        }
+                        if (childSearch == q6Bases.size()
+                            || q6Bases[childSearch] != target) {
+                            std::cerr
+                                << "Internal error: missing S1 ladder "
+                                   "child."
+                                << std::endl;
+                            std::abort();
+                        }
+                        children[parent] =
+                            static_cast<UInt32>(childSearch);
+                    }
+                };
+                buildMonotoneMap(s1P11ChildByParent, 11, false);
+                buildMonotoneMap(s1P13ChildByRoot, 13, true);
+
+                const UInt128 wideRootLimit128 =
+                    n / UInt128(S1Q30030NarrowArgumentMax + 1);
+                const UInt64 wideRootLimit =
+                    wideRootLimit128 > UInt128(nu)
+                    ? nu
+                    : static_cast<UInt64>(wideRootLimit128);
+                const UInt64 wideChildLimit =
+                    wideRootLimit > nu / 13
+                    ? nu
+                    : 13 * wideRootLimit;
+                s1P13NarrowChildBegin = std::upper_bound(
+                    q6Bases.begin(), q6Bases.end(),
+                    boundedBase(wideChildLimit)
+                ) - q6Bases.begin();
+
+                useS1Q30030Ladder = std::any_of(
+                    s1P11ChildByParent.begin(),
+                    s1P11ChildByParent.end(),
+                    [](UInt32 child) {
+                        return child != MissingChild;
+                    }
+                );
+
+                if constexpr (ValidateS1Q30030Ladder) {
+                    if (q6Bases.size() != s1Q6Worklist.size()
+                        || !std::is_sorted(
+                            q6Bases.begin(), q6Bases.end()
+                        )) {
+                        std::cerr
+                            << "Internal error: S1 ladder worklist "
+                               "ordering."
+                            << std::endl;
+                        std::abort();
+                    }
+                    for (std::size_t workIndex = 0;
+                         workIndex < q6Bases.size();
+                         ++workIndex) {
+                        const UInt64 base = q6Bases[workIndex];
+                        const bool child11 = (
+                            s1P11ChildMask[workIndex >> 6]
+                            >> (workIndex & 63)
+                        ) & 1ULL;
+                        const bool child13 = (
+                            s1P13ChildMask[workIndex >> 6]
+                            >> (workIndex & 63)
+                        ) & 1ULL;
+                        if (child11 != (base % 11 == 0)
+                            || child13 != (
+                                base % 13 == 0 && base % 11 != 0
+                            )
+                            || (q6Signs[workIndex] != -1
+                                && q6Signs[workIndex] != 1)) {
+                            std::cerr
+                                << "Internal error: S1 ladder member "
+                                   "metadata mismatch."
+                                << std::endl;
+                            std::abort();
+                        }
+                    }
+
+                    auto validateMap = [&](
+                        const std::vector<UInt32>& children,
+                        UInt64 prime,
+                        bool rejectEleven
+                    ) {
+                        for (std::size_t parent = 0;
+                             parent < children.size();
+                             ++parent) {
+                            const bool eligible =
+                                q6Bases[parent] % prime != 0
+                                && (!rejectEleven
+                                    || q6Bases[parent] % 11 != 0);
+                            const UInt32 child = children[parent];
+                            if (eligible != (child != MissingChild)
+                                || (eligible
+                                    && (child >= q6Bases.size()
+                                        || child <= parent
+                                        || UInt64(q6Bases[parent])
+                                                * prime
+                                            != q6Bases[child]
+                                        || q6Signs[child]
+                                            != -q6Signs[parent]))) {
+                                std::cerr
+                                    << "Internal error: S1 ladder map "
+                                       "mismatch."
+                                    << std::endl;
+                                std::abort();
+                            }
+                        }
+                    };
+                    validateMap(s1P11ChildByParent, 11, false);
+                    validateMap(s1P13ChildByRoot, 13, true);
+                    for (std::size_t root = 0;
+                         root < s1P13ChildByRoot.size();
+                         ++root) {
+                        const UInt32 child13 =
+                            s1P13ChildByRoot[root];
+                        if (child13 == MissingChild) continue;
+                        const bool rootNarrow =
+                            s1Q6Worklist[root].compactIndex > cnt128;
+                        if (root >= s1P11ChildByParent.size()
+                            || s1P11ChildByParent[root]
+                                == MissingChild
+                            || rootNarrow
+                                != (child13
+                                    >= s1P13NarrowChildBegin)) {
+                            std::cerr
+                                << "Internal error: S1 ladder root "
+                                   "classification mismatch."
+                                << std::endl;
+                            std::abort();
+                        }
+                    }
+                }
+            }
+
+            if (!useS1Q30030Ladder) {
+                releaseVector(s1P11ChildMask);
+                releaseVector(s1P13ChildMask);
+                releaseVector(s1P11ChildByParent);
+                releaseVector(s1P13ChildByRoot);
+            }
+            if ((useS1Q30030Ladder
+                    && (!useQ210Coupled
+                        || s1Q30030AccumulatorFallback))
+                || (!useS1Q30030Ladder
+                    && (!s1P11ChildMask.empty()
+                        || !s1P13ChildMask.empty()
+                        || !s1P11ChildByParent.empty()
+                        || !s1P13ChildByRoot.empty()))
+#if MERTENSHURST_S1_Q30030_FORCE_Q210_FALLBACK
+                || (q210ForcedFallback
+                        != (useQ30Coupled && !q210GuardFallback)
+                    || useQ210Coupled)
+#endif
+                ) {
+                std::cerr
+                    << "Internal error: S1 ladder/Q210 activation "
+                       "mismatch."
+                    << std::endl;
+                std::abort();
+            }
+        }
+#endif
 
         auto compactQ6Bounds = [&](std::vector<UInt64>& compact,
                                    std::vector<UInt64>& full,
@@ -903,6 +1234,443 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 #endif
                               ) {
         if constexpr (UseS1OuterQ6) {
+#if MERTENSHURST_S1_Q30030_LADDER
+            if constexpr (UseS1Q30030Ladder) {
+                if (!loop2 && useQ6CompactHotState
+                    && useS1Q30030Ladder) {
+                    auto marked = [](const std::vector<UInt64>& mask,
+                                     UInt64 index) {
+                        return (
+                            mask[index >> 6] >> (index & 63)
+                        ) & 1ULL;
+                    };
+                    constexpr UInt32 MissingChild =
+                        std::numeric_limits<UInt32>::max();
+                    auto numerator = [&](UInt64 workIndex) {
+                        return workIndex < q6WideCount
+                            ? q6PartialArgs128[workIndex]
+                            : UInt128(q6PartialArgs[workIndex]);
+                    };
+                    auto sum210 = [&](UInt128 y, UInt64 lowerExclusive,
+                                      UInt64 upperInclusive) -> Int128 {
+                        if (lowerExclusive >= upperInclusive) return 0;
+                        if (y > UInt128(
+                                S1Q30030NarrowArgumentMax
+                            )) {
+                            return evaluateS1OuterQ210ZeroComplete(
+                                y, lowerExclusive, upperInclusive,
+                                segmentLo, segmentHi, mertensCoarse,
+                                residual, qCache, dCAP, false
+                            );
+                        }
+                        return Int128(evaluateS1OuterQ210ZeroComplete(
+                            static_cast<UInt64>(y), lowerExclusive,
+                            upperInclusive, segmentLo, segmentHi,
+                            mertensCoarse, residual, qCache, dCAP, false
+                        ));
+                    };
+                    auto sum2310 = [&](UInt128 y, UInt64 lowerExclusive,
+                                       UInt64 upperInclusive) -> Int128 {
+                        if (lowerExclusive >= upperInclusive) return 0;
+                        if (y > UInt128(
+                                S1Q30030NarrowArgumentMax
+                            )) {
+                            return evaluateS1OuterQ2310PairedParent(
+                                y, lowerExclusive, upperInclusive,
+                                segmentLo, segmentHi, mertensCoarse,
+                                residual, qCache, dCAP
+                            );
+                        }
+                        return Int128(evaluateS1OuterQ2310PairedParent(
+                            static_cast<UInt64>(y), lowerExclusive,
+                            upperInclusive, segmentLo, segmentHi,
+                            mertensCoarse, residual, qCache, dCAP
+                        ));
+                    };
+                    auto sum30030 = [&](UInt128 y, UInt64 lowerExclusive,
+                                        UInt64 upperInclusive) -> Int128 {
+                        if (lowerExclusive >= upperInclusive) return 0;
+                        if (y > UInt128(
+                                S1Q30030NarrowArgumentMax
+                            )) {
+                            return evaluateS1OuterQ30030LadderParent(
+                                y, lowerExclusive, upperInclusive,
+                                segmentLo, segmentHi, mertensCoarse,
+                                residual, qCache, dCAP
+                            );
+                        }
+                        return Int128(evaluateS1OuterQ30030LadderParent(
+                            static_cast<UInt64>(y), lowerExclusive,
+                            upperInclusive, segmentLo, segmentHi,
+                            mertensCoarse, residual, qCache, dCAP
+                        ));
+                    };
+                    auto hasCoprime210SupportExact = [&](
+                        auto y,
+                        UInt64 lowerExclusive,
+                        UInt64 upperInclusive
+                    ) {
+                        using TArg = decltype(y);
+#ifndef NDEBUG
+                        assert(segmentLo != 0);
+#endif
+                        if (lowerExclusive >= upperInclusive) return false;
+                        const TArg loBySegment =
+                            segmentHi
+                                == std::numeric_limits<UInt64>::max()
+                            ? TArg(1)
+                            : y / TArg(segmentHi + 1) + TArg(1);
+                        const TArg hiBySegment =
+                            y / TArg(segmentLo);
+                        if (loBySegment > TArg(upperInclusive)
+                            || hiBySegment <= TArg(lowerExclusive)) {
+                            return false;
+                        }
+                        const UInt64 lo = std::max(
+                            lowerExclusive + 1,
+                            static_cast<UInt64>(loBySegment)
+                        );
+                        const UInt64 hi =
+                            hiBySegment >= TArg(upperInclusive)
+                            ? upperInclusive
+                            : static_cast<UInt64>(hiBySegment);
+                        return lo <= hi
+                            && S1Q30030LadderDetail::
+                                NextCoprime210Delta[lo % 210]
+                                <= hi - lo;
+                    };
+                    auto hasCoprime210Support = [&](
+                        UInt128 y,
+                        UInt64 lowerExclusive,
+                        UInt64 upperInclusive
+                    ) {
+                        if (y > UInt128(
+                                S1Q30030NarrowArgumentMax
+                            )) {
+                            return hasCoprime210SupportExact(
+                                y, lowerExclusive, upperInclusive
+                            );
+                        }
+                        return hasCoprime210SupportExact(
+                            static_cast<UInt64>(y),
+                            lowerExclusive, upperInclusive
+                        );
+                    };
+                    auto nativeRow = [&](UInt64 workIndex) {
+                        return sum210(
+                            numerator(workIndex),
+                            q6PartialArgsDivU[workIndex],
+                            q6CommonKappa[workIndex]
+                        );
+                    };
+                    auto subtractAtRoot = [&](UInt64 workIndex,
+                                              Int128 value,
+                                              bool combined) {
+                        if (workIndex < q6WideCount) {
+                            q6CompactValues128[workIndex] -= value;
+                        } else {
+                            const std::size_t narrowIndex =
+                                workIndex - q6WideCount;
+                            if (combined) {
+                                const Int128 updated =
+                                    Int128(q6CompactValues[narrowIndex])
+                                    - value;
+                                if (updated < Int128(
+                                            std::numeric_limits<
+                                                Int64
+                                            >::min()
+                                        )
+                                    || updated > Int128(
+                                            std::numeric_limits<
+                                                Int64
+                                            >::max()
+                                        )) {
+                                    std::cerr
+                                        << "Internal error: narrow ladder "
+                                           "destination overflow."
+                                        << std::endl;
+                                    std::abort();
+                                }
+                                q6CompactValues[narrowIndex] =
+                                    static_cast<Int64>(updated);
+                            } else {
+                                q6CompactValues[narrowIndex]
+                                    -= static_cast<Int64>(value);
+                            }
+                        }
+                    };
+                    using MIntT = std::remove_cv_t<
+                        std::remove_pointer_t<decltype(mertensCoarse)>
+                    >;
+                    auto p13Active = [&](UInt64 rootIndex) {
+                        if constexpr (std::is_same_v<MIntT, Int16>)
+                            return true;
+                        return rootIndex >= q6WideCount;
+                    };
+
+                    #pragma omp parallel for schedule(dynamic, 1)
+                    for (UInt64 workIndex = 0;
+                         workIndex < s1Q6Worklist.size();
+                         ++workIndex) {
+                        if (marked(s1P11ChildMask, workIndex))
+                            continue;
+
+                        const UInt32 p13Child =
+                            workIndex < s1P13ChildByRoot.size()
+                            ? s1P13ChildByRoot[workIndex]
+                            : MissingChild;
+                        if (p13Child != MissingChild) {
+                            if (p13Active(workIndex)) {
+                                const UInt32 child11Index =
+                                    workIndex
+                                        < s1P11ChildByParent.size()
+                                    ? s1P11ChildByParent[workIndex]
+                                    : MissingChild;
+                                if (child11Index == MissingChild
+                                    || p13Child
+                                        >= s1Q6Worklist.size()) {
+                                    std::cerr
+                                        << "Internal error: incomplete "
+                                           "S1 ladder group."
+                                        << std::endl;
+                                    std::abort();
+                                }
+                                const UInt64 child11 = child11Index;
+                                const UInt64 child13 = p13Child;
+                                const bool full = child13
+                                        < s1P11ChildByParent.size()
+                                    && s1P11ChildByParent[child13]
+                                        != MissingChild;
+                                const UInt64 child143 = full
+                                    ? s1P11ChildByParent[child13]
+                                    : 0;
+
+                                const UInt128 y = numerator(workIndex);
+                                const UInt128 y13 = numerator(child13);
+                                const UInt128 y143 = full
+                                    ? numerator(child143)
+                                    : y / 143;
+                                const UInt64 kappa =
+                                    q6CommonKappa[workIndex];
+                                const UInt64 kappa11 =
+                                    q6CommonKappa[child11];
+                                const UInt64 kappa13 =
+                                    q6CommonKappa[child13];
+                                const UInt64 common11 = kappa / 11;
+                                const UInt64 common13 = kappa / 13;
+                                const UInt64 common143 = kappa / 143;
+
+                                auto nativeGroup = [&] {
+                                    Int128 native =
+                                        nativeRow(workIndex)
+                                        - nativeRow(child11)
+                                        - nativeRow(child13);
+                                    if (full)
+                                        native += nativeRow(child143);
+                                    return native;
+                                };
+                                const bool validBounds =
+                                    common11 <= kappa11
+                                    && common13 <= kappa13
+                                    && (!full
+                                        || (common143
+                                                <= q6CommonKappa[child143]
+                                            && kappa13 / 11
+                                                <= q6CommonKappa[child143]));
+                                if (!validBounds) {
+                                    if constexpr (
+                                        ValidateS1Q30030Ladder
+                                    ) {
+                                        std::cerr
+                                            << "Internal error: S1 ladder "
+                                               "common/native split order."
+                                            << std::endl;
+                                        std::abort();
+                                    }
+                                    subtractAtRoot(
+                                        workIndex, nativeGroup(), true
+                                    );
+                                    continue;
+                                }
+                                if constexpr (ValidateS1Q30030Ladder) {
+                                    const bool validGroup =
+                                        y / 11
+                                            == numerator(child11)
+                                        && y / 13 == y13
+                                        && (!full
+                                            || (y / 143 == y143
+                                                && q6Signs[child143]
+                                                    == q6Signs[workIndex]))
+                                        && q6Signs[child11]
+                                            == -q6Signs[workIndex]
+                                        && q6Signs[child13]
+                                            == -q6Signs[workIndex];
+                                    if (!validGroup) {
+                                        std::cerr
+                                            << "Internal error: S1 ladder "
+                                               "group invariant."
+                                            << std::endl;
+                                        std::abort();
+                                    }
+                                }
+
+                                Int128 value = sum30030(
+                                    y, q6PartialArgsDivU[workIndex],
+                                    kappa
+                                );
+                                value -= sum210(
+                                    numerator(child11), common11, kappa11
+                                );
+
+                                // The hierarchy deletes the duplicated Q210
+                                // interval (common143, canonical143]. Use it
+                                // only when that interval has support in this
+                                // segment; otherwise independent Q210 seams
+                                // are cheaper at equal support.
+                                const UInt64 canonical143 = kappa13 / 11;
+                                const bool canonical =
+                                    full
+                                    && hasCoprime210Support(
+                                        y143, common143, canonical143
+                                    );
+                                if (canonical) {
+                                    value -= sum2310(
+                                        y13, common13, kappa13
+                                    );
+                                    value += sum210(
+                                        y143, canonical143,
+                                        q6CommonKappa[child143]
+                                    );
+                                } else {
+                                    value -= sum210(
+                                        y13, common13, kappa13
+                                    );
+                                    if (full) {
+                                        value += sum210(
+                                            y143, common143,
+                                            q6CommonKappa[child143]
+                                        );
+                                    } else {
+                                        value -= sum210(
+                                            y143,
+                                            q6PartialArgsDivU[workIndex]
+                                                / 143,
+                                            common143
+                                        );
+                                    }
+                                }
+
+                                if constexpr (ValidateS1Q30030Ladder) {
+                                    const Int128 native = nativeGroup();
+                                    if (value != native) {
+                                        #pragma omp critical
+                                        {
+                                            std::cerr
+                                                << "Internal error: p13 "
+                                                   "ladder mismatch at row "
+                                                << workIndex << "."
+                                                << std::endl;
+                                        }
+                                        std::abort();
+                                    }
+                                }
+                                subtractAtRoot(
+                                    workIndex, value, true
+                                );
+                                continue;
+                            }
+                        }
+
+                        if (marked(s1P13ChildMask, workIndex)) {
+                            if constexpr (std::is_same_v<MIntT, Int16>) {
+                                continue;
+                            }
+                            if (workIndex >= s1P13NarrowChildBegin)
+                                continue;
+                        }
+
+                        const UInt32 p11Child =
+                            workIndex < s1P11ChildByParent.size()
+                            ? s1P11ChildByParent[workIndex]
+                            : MissingChild;
+                        if (p11Child != MissingChild) {
+                            const UInt64 child = p11Child;
+                            if (child >= s1Q6Worklist.size()) {
+                                std::cerr
+                                    << "Internal error: incomplete p11 "
+                                       "S1 ladder pair."
+                                    << std::endl;
+                                std::abort();
+                            }
+                            const UInt64 commonKappa =
+                                q6CommonKappa[workIndex] / 11;
+                            if (commonKappa > q6CommonKappa[child]) {
+                                if constexpr (
+                                    ValidateS1Q30030Ladder
+                                ) {
+                                    std::cerr
+                                        << "Internal error: p11 S1 "
+                                           "common/native split order."
+                                        << std::endl;
+                                    std::abort();
+                                }
+                                subtractAtRoot(
+                                    workIndex,
+                                    nativeRow(workIndex)
+                                        - nativeRow(child),
+                                    true
+                                );
+                                continue;
+                            }
+                            if constexpr (ValidateS1Q30030Ladder) {
+                                if (numerator(workIndex) / 11
+                                        != numerator(child)
+                                    || q6Signs[child]
+                                        != -q6Signs[workIndex]) {
+                                    std::cerr
+                                        << "Internal error: p11 S1 "
+                                           "pair invariant."
+                                        << std::endl;
+                                    std::abort();
+                                }
+                            }
+                            Int128 value = sum2310(
+                                numerator(workIndex),
+                                q6PartialArgsDivU[workIndex],
+                                q6CommonKappa[workIndex]
+                            );
+                            value -= sum210(
+                                numerator(child),
+                                commonKappa,
+                                q6CommonKappa[child]
+                            );
+                            if constexpr (ValidateS1Q30030Ladder) {
+                                const Int128 native =
+                                    nativeRow(workIndex) - nativeRow(child);
+                                if (value != native) {
+                                    #pragma omp critical
+                                    {
+                                        std::cerr
+                                            << "Internal error: p11 ladder "
+                                               "mismatch at row "
+                                            << workIndex << "."
+                                            << std::endl;
+                                    }
+                                    std::abort();
+                                }
+                            }
+                            subtractAtRoot(workIndex, value, true);
+                            continue;
+                        }
+
+                        subtractAtRoot(
+                            workIndex, nativeRow(workIndex), false
+                        );
+                    }
+                    return;
+                }
+            }
+#endif
             #pragma omp parallel for schedule(dynamic, 1)
             for (UInt64 workIndex = 0; workIndex < s1Q6Worklist.size(); ++workIndex) {
                 const S1Q6WorkItem& item = s1Q6Worklist[workIndex];
@@ -2283,6 +3051,15 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     MPrev = M16Prev;
     doLoop01Iteration(MP, MPrev, nuMax, 3);
 
+#if MERTENSHURST_S1_Q30030_LADDER
+    if constexpr (UseS1Q30030Ladder) {
+        releaseVector(s1P11ChildMask);
+        releaseVector(s1P13ChildMask);
+        releaseVector(s1P11ChildByParent);
+        releaseVector(s1P13ChildByRoot);
+    }
+#endif
+
 #undef M16BITMAX
 #undef MFRAC
 
@@ -2467,6 +3244,17 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                   << (useQ210Coupled ? "active" : "Q30 fallback")
                   << std::endl;
         if (!useQ210Coupled) {
+#if MERTENSHURST_S1_Q30030_FORCE_Q210_FALLBACK
+            std::cout << "  fallback reason: "
+                      << (!useQ30Coupled
+                              ? "upstream Q30 guard"
+                              : q210ForcedFallback
+                                  ? "forced validation fallback"
+                              : q210GuardFallback
+                                  ? "full-Q210 guard"
+                                  : "Q210 not selected")
+                      << std::endl;
+#else
             std::cout << "  fallback reason: "
                       << (!useQ30Coupled
                               ? "upstream Q30 guard"
@@ -2474,7 +3262,19 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                                   ? "full-Q210 guard"
                                   : "Q210 not selected")
                       << std::endl;
+#endif
         }
+#if MERTENSHURST_S1_Q30030_LADDER
+        std::cout << "S1 Q30030 ladder: "
+                  << (useS1Q30030Ladder
+                          ? "active"
+                          : s1Q30030AccumulatorFallback
+                              ? "accumulator guard fallback"
+                          : useQ210Coupled
+                              ? "no eligible pairs"
+                              : "Q210 fallback")
+                  << std::endl;
+#endif
 #endif
         std::cout << std::endl;
         if (t[0] + t[1] + t[2] > 0.0) {
