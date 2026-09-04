@@ -46,7 +46,7 @@ $n$ is cast to `double` (53-bit mantissa) for `sqrt`, `cbrt`, and `log`. Precisi
 
 The bucket scheduler for large primes uses a circular buffer of `LP_SIZE` buckets. Its exact largest schedulable prime is `(LP_SIZE - 1) * M2`, so the runtime conservatively enforces $u \le (511 \times 887{,}040)^2 = 205{,}460{,}437{,}612{,}953{,}600 \approx 2.05 \times 10^{17}$. (This is the configuration used for the record runs and described in Section 7 of the paper: `LP_SIZE = 512`, `M2 = 887,040`.)
 
-With `fac == 0.75`: **max $n \approx 5.9 \times 10^{26}$** (the figure quoted in the paper). Build with `make EXTRA_CXXFLAGS=-DSIEVE_LP_SIZE=1024` to go higher (the default narrow entries store the prime as `UInt32`, and the wide packed payload supports `LP_SIZE` up to exactly 1024, so capacity is not payload-limited); the runtime cap on $u$ scales with the flag automatically. Alternatively, build with `make BUCKET_SIEVE=0` to disable the bucket scheduler entirely (all primes are sieved as medium primes via direct iteration), which removes this constraint.
+With the tuned default factor (which reaches its $0.30$ floor at $10^{26}$): **max $n \approx 2.3 \times 10^{27}$**. Build with `make EXTRA_CXXFLAGS=-DSIEVE_LP_SIZE=1024` to go higher (the default narrow entries store the prime as `UInt32`, and the wide packed payload supports `LP_SIZE` up to exactly 1024, so capacity is not payload-limited); the runtime cap on $u$ scales with the flag automatically. Alternatively, build with `make BUCKET_SIEVE=0` to disable the bucket scheduler entirely (all primes are sieved as medium primes via direct iteration), which removes this constraint.
 
 **Note:** This bound is enforced at runtime in `MertensHurst.cpp` for every source of $u$ (default formula, `--u`, or `--u-factor`), via `SegmentedMobiusSieveCore::schedulerReach()`. Builds with `USE_BUCKET_SIEVE=0` are subject only to constraints 4, 5, and 8.
 
@@ -60,7 +60,7 @@ When built with `DIVISION_FREE=1` (the default on x86; never used on ARM), the M
 
 $$u < 2^{60} - 2^{32} = 1\,152\,921\,500\,311\,879\,680 \approx 1.1529 \times 10^{18}.$$
 
-Inverting the default $u(n)$ formula (`fac == 0.75` at this scale), the smallest input whose sieve range reaches this bound is **max $n \approx 7.9 \times 10^{27}$** — far tighter than the encoding/prime caps of constraints 5 and 8, so on `DIVISION_FREE=1` builds with the bucket scheduler disabled this constraint binds first.
+Inverting the tuned default $u(n)$ formula (`fac == 0.30` at this scale), the smallest input whose sieve range reaches this bound is **max $n \approx 3.2 \times 10^{28}$**. This remains below the encoding/prime caps of constraints 5 and 8, although other algorithmic limits may bind first.
 
 `SegmentedMobiusSieveCore::sieve()` asserts the bound at entry (active only in non-`NDEBUG` builds); it is not otherwise enforced at runtime, so on a `DIVISION_FREE=1` release build a manual $u$ above $2^{60} - 2^{32}$ computes incorrect quotients. In the default configuration this window is unreachable, since the bucket-scheduler cap of constraint 3 ($2.05 \times 10^{17}$) is enforced first. Build with `DIVISION_FREE=0` to remove this constraint entirely.
 
@@ -72,7 +72,7 @@ Inverting the default $u(n)$ formula (`fac == 0.75` at this scale), the smallest
 
 The sieve stores the accumulated ceil-log2 weights $\lceil \log_2 p \rceil \mid 1$ in a 7-bit byte field. This encoding is collision-free (finalization is an exact comparison — see `sieve/PERFORMANCE.md` §5 and Section 5 of the paper), and the accumulated sum stays below 128 for every $u < 2^{64}$. The requirement $u < 2^{64}$ is therefore the only intrinsic encoding limit.
 
-In practice it coincides with the `UInt32` prime cap of constraint 8, since $\sqrt{u} < 2^{32}$ is the same bound: both give $u \lesssim 1.8 \times 10^{19}$ and **max $n \approx 5 \times 10^{29}$** under the default $u(n)$ formula. This combined cap is enforced at runtime in `MertensHurst.cpp`, together with the bucket-scheduler cap of constraint 3 on `USE_BUCKET_SIEVE=1` builds.
+In practice it coincides with the `UInt32` prime cap of constraint 8, since $\sqrt{u} < 2^{32}$ is the same bound: both give $u \lesssim 1.8 \times 10^{19}$ and **max $n \approx 2.0 \times 10^{30}$** under the tuned default $u(n)$ formula. This combined cap is enforced at runtime in `MertensHurst.cpp`, together with the bucket-scheduler cap of constraint 3 on `USE_BUCKET_SIEVE=1` builds.
 
 ---
 

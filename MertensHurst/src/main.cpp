@@ -64,7 +64,7 @@ static void printUsage(const char* prog) {
                  " (default: 12000000000, about 12 GB)" << std::endl;
     std::cerr << "  --u <value>          set the sieve truncation point directly" << std::endl;
     std::cerr << "  --u-factor <value>   set the u scaling factor"
-                 " (default: 0.75)" << std::endl;
+                 " (default: 0.55 at 1e16 to 0.30 at 1e26)" << std::endl;
     std::cerr << "  --nu-ratio <value>   S1/S2 split ratio (default: 1.4)" << std::endl;
     std::cerr << std::endl;
     std::cerr << "  --u and --u-factor are mutually exclusive." << std::endl;

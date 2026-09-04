@@ -441,7 +441,9 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     if (uOverride > 0) {
         u = uOverride;
     } else {
-        double fac = 0.75;
+        double fac = std::clamp(
+            0.55 - 0.025 * (std::log10((double)n) - 16.0), 0.3, 0.55
+        );
         if (uFactor > 0.0)
             fac = uFactor;
         u = std::ceil(fac * std::pow(std::cbrt((double)n / std::log(std::log((double)n))), 2));

@@ -24,7 +24,7 @@
 //
 // uFactor:    override the scaling factor in the u formula (0.0 = use default).
 //              u = ceil(uFactor * (n / log(log(n)))^{2/3}).
-//              Default 0.75.
+//              Default clamp(0.55 - 0.025*(log10(n) - 16), 0.30, 0.55).
 //              Mutually exclusive with uOverride.
 //
 // nuRatio:    S1/S2 split ratio. get_nu(x) = floor(nuRatio * sqrt(x)).
