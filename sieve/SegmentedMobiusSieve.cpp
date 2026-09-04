@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
+#include <iostream>
 #include <omp.h>
 
 // Toggle the large-prime bucket scheduler. When disabled, all primes above
@@ -134,19 +136,19 @@ void SegmentedMobiusSieveCore::fillFromStencil(UInt64 size) {
 std::vector<UInt32> SegmentedMobiusSieveCore::primesUpTo(UInt32 n) {
     std::vector<UInt32> S(n);
 
-    for (Int32 i = 2; i <= (Int32)n; ++i)
-        S[i - 2] = i;
+    for (UInt64 i = 2; i <= n; ++i)
+        S[i - 2] = static_cast<UInt32>(i);
 
-    const Int32 sqrtn = static_cast<Int32>(std::sqrt((double)n));
-    for (Int32 i = 1; i <= sqrtn; ++i) {
+    const UInt32 sqrtn = static_cast<UInt32>(std::sqrt((double)n));
+    for (UInt32 i = 1; i <= sqrtn; ++i) {
         if (S[i - 1] != 0) {
-            for (Int32 k = 2 * i + 1; k <= (Int32)n - 1; k += i + 1)
+            for (UInt64 k = UInt64(2) * i + 1; k <= UInt64(n) - 1; k += i + 1)
                 S[k - 1] = 0;
         }
     }
 
-    S.erase(std::remove(S.begin(), S.end(), (UInt32)0), S.end());
-    return S;
+    const auto end = std::remove(S.begin(), S.end(), (UInt32)0);
+    return std::vector<UInt32>(S.begin(), end);
 }
 
 // ============================================================================
@@ -168,8 +170,13 @@ void SegmentedMobiusSieveCore::sieve(UInt64 lo, UInt64 hi, const std::vector<UIn
         // bucket-sieve range cap (2.05e17) is far below this; only
         // BUCKET_SIEVE=0 builds, where the encoding stays exact to ~1.8e19,
         // can reach it — those must use DIVISION_FREE=0 past this bound.
-        assert(hi < (1ULL << 60) - (1ULL << 32) &&
-               "DIVISION_FREE=1 requires hi < 2^60 - 2^32 (quotient cache domain)");
+        constexpr UInt64 quotientCacheLimit =
+            (UInt64(1) << 60) - (UInt64(1) << 32);
+        if (__builtin_expect(hi >= quotientCacheLimit, false)) {
+            std::cerr << "Error: DIVISION_FREE=1 requires sieve endpoint < "
+                      << quotientCacheLimit << "." << std::endl;
+            std::abort();
+        }
     }
 
     const UInt64 len = hi - lo + 1;
@@ -216,8 +223,19 @@ void SegmentedMobiusSieveCore::sieve(UInt64 lo, UInt64 hi, const std::vector<UIn
     // Guard: the largest sieved prime must fit within the circular bucket
     // scheduler's capacity. If this fires, increase LP_SIZE to the next
     // power of two.
-    assert(mSqrtPrimeStopIdx <= mM1PrimeStopIdx ||
-           (UInt64)P[mSqrtPrimeStopIdx - 1] <= (LargePrimeHitScheduler::LP_SIZE - 1) * M2);
+    if constexpr (UseBucketSieve) {
+        constexpr UInt64 schedulerReach =
+            (LargePrimeHitScheduler::LP_SIZE - 1) * M2;
+        if (__builtin_expect(
+                mSqrtPrimeStopIdx > mM1PrimeStopIdx &&
+                UInt64(P[mSqrtPrimeStopIdx - 1]) > schedulerReach,
+                false)) {
+            std::cerr << "Error: largest sieved prime exceeds bucket scheduler "
+                      << "reach " << schedulerReach << ". Increase LP_SIZE."
+                      << std::endl;
+            std::abort();
+        }
+    }
 
     UInt32 idxLargeBegin = mM1PrimeStopIdx;
     if constexpr (UseBucketSieve) {

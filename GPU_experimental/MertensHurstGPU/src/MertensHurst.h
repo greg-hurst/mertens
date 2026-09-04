@@ -20,7 +20,7 @@
 //              Rounded up to nearest multiple of STENCIL_PERIOD (13860).
 //
 // uOverride:  set the sieve truncation point directly (0 = use formula).
-//              Must satisfy: 0 < u < n, u <= 1.157e18.
+//              Must satisfy 0 < u < n and the build-specific sieve cap.
 //
 // uFactor:    override the scaling factor in the u formula (0.0 = use default).
 //              u = ceil(uFactor * (n / log(log(n)))^{2/3}).

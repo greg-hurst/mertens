@@ -16,9 +16,9 @@ by Mertens' second theorem. The Mertens prefix sum adds a linear pass, so the ov
 
 When used inside the $O(n^{2/3})$ MertensHurst algorithm, the sieve range is $[1, u]$ where
 
-$$u = \left\lceil \texttt{fac} \cdot \left(\frac{n}{\ln \ln n}\right)^{\!2/3} \right\rceil, \qquad \texttt{fac} = \text{clamp}\!\left(1.95 - 0.05 \log_{10} n,\ 0.75,\ 1.10\right).$$
+$$u = \left\lceil \texttt{fac} \cdot \left(\frac{n}{\ln \ln n}\right)^{\!2/3} \right\rceil, \qquad \texttt{fac} = \text{clamp}\!\left(0.55 - 0.025(\log_{10} n - 16),\ 0.30,\ 0.55\right).$$
 
-The factor $\texttt{fac}$ is $1.10$ for $n \le 10^{17}$ and decreases linearly in $\log_{10} n$ to $0.75$ at $n = 10^{24}$ and above, balancing sieve cost $O(u \log \log u)$ against the $S_1$/$S_2$ summation cost $O(n / \sqrt{u})$. The $\ln \ln n$ term in the denominator reflects that sieving becomes relatively cheaper at larger $n$ because each prime eliminates a $1/p$ fraction of positions, and the sum $\sum 1/p$ grows only as $\log \log n$.
+The factor $\texttt{fac}$ is $0.55$ through $10^{16}$ and decreases linearly in $\log_{10} n$ to its $0.30$ floor at $10^{26}$, balancing sieve cost $O(u \log \log u)$ against the $S_1$/$S_2$ summation cost $O(n / \sqrt{u})$. The $\ln \ln n$ term in the denominator reflects that sieving becomes relatively cheaper at larger $n$ because each prime eliminates a $1/p$ fraction of positions, and the sum $\sum 1/p$ grows only as $\log \log n$.
 
 The sieve's contribution to total MertensHurst runtime is therefore $O\!\left((n / \ln \ln n)^{2/3} \cdot \log \log n\right) = O\!\left(n^{2/3} (\log \log n)^{1/3}\right)$.
 
@@ -76,18 +76,18 @@ where the coarse array stores a full Mertens value once every $H = 256$ position
 
 | Array | Type | Size per segment | Purpose |
 |-------|------|-----------------|---------|
-| `coarse` | `Int64[]` | $\lceil B / 256 \rceil \times 8$ bytes | $M$ at every 256th position |
+| `coarse` | `Int32[]` | $\lceil B / 256 \rceil \times 4$ bytes | $M$ at every 256th position |
 | `residual` | `Int8[]` | $B$ bytes | Signed offset from nearest coarse sample |
 
-The purpose of this representation is to trade a slightly more complicated lookup for a substantially smaller working set and less memory traffic. If every sieved value of $M$ were stored as a 32-bit integer, the storage cost would be four bytes per entry. With stride $H = 256$, the coarse array contributes slightly more than one byte per $H$ entries and the residual array contributes one byte per entry, for a total of about one quarter of the 32-bit baseline. Relative to a 64-bit baseline, the reduction is about a factor of eight. A lookup now requires one access into the coarse array and one byte access into the residual array. In the MertensHurst algorithm, `getM` is called billions of times in the $S_1$ inner loop, so the compressed layout's cache footprint matters more than the extra addition.
+The purpose of this representation is to trade a slightly more complicated lookup for a substantially smaller working set and less memory traffic. If every sieved value of $M$ were stored as a 32-bit integer, the storage cost would be four bytes per entry. With stride $H = 256$, the coarse array contributes four bytes per interval and the residual array contributes one byte per entry, for a total of about one quarter of the 32-bit baseline. Relative to a 64-bit baseline, the reduction is about a factor of eight. A lookup now requires one access into the coarse array and one byte access into the residual array. In the MertensHurst algorithm, `getM` is called billions of times in the $S_1$ inner loop, so the compressed layout's cache footprint matters more than the extra addition.
 
 In `Direct` mode, $M(x)$ is stored as a flat `Int32[]` array ($4B$ bytes). This is appropriate when the consumer reads all values sequentially rather than performing random-access lookups.
 
-For a $10^9$-element segment, the compressed mode uses approximately 1.03 GB (31 MB coarse + 1 GB residual) compared to 4 GB in direct mode.
+For a $10^9$-element segment, the stored representation uses approximately 1.016 GB (15.6 MB coarse + 1 GB residual) compared to 4 GB in direct mode. Prefix construction also retains temporary interval-sum and leading-value arrays of the same interval count.
 
 ### In-place sieving
 
-`sieveInPlace()` aliases the residual array onto the $\mu$ buffer, eliminating one $B$-byte allocation. This is used in MertensHurst's Loop 2, where the $\mu$ values are not needed after the prefix sum, saving approximately 12 GB at large $n$.
+`sieveInPlace()` aliases the residual array onto the $\mu$ buffer, eliminating one $B$-byte allocation. This is used in MertensHurst's Loop 2, where the $\mu$ values are not needed after the prefix sum, saving exactly one segment buffer.
 
 ---
 
@@ -148,7 +148,7 @@ $$\sqrt{N} \le 511 \times 887{,}040 = 453{,}277{,}440 \implies N \le 205{,}460{,
 
 For larger ranges, build with `-DSIEVE_LP_SIZE=1024`, which raises the limit to $(1023 \times 887{,}040)^2 \approx 8.23 \times 10^{17}$ (still below the encoding overflow cap of §5). Alternatively, building with `BUCKET_SIEVE=0` disables the scheduler entirely; all primes use direct iteration, which removes this constraint but is slower.
 
-When the sieve is used inside MertensHurst with the default $u(n)$ formula (`fac` $= 0.75$ at scale), this supports inputs to roughly $n = 5.9 \times 10^{26}$ (the figure quoted in the paper), comfortably above the tested $10^{25}$.
+When the sieve is used inside MertensHurst with the current default $u(n)$ formula (`fac` $= 0.30$ at scale), this scheduler bound is not reached until roughly $n = 2.3 \times 10^{27}$. Other MertensHurst index limits bind first.
 
 ### Setup cost
 
@@ -207,7 +207,7 @@ Setting this equal to 128 gives expected overflow at:
 
 At `STRIDE_LOG = 7` ($H = 128$), overflow is mathematically impossible: every interval of 128 consecutive integers contains at least $\lfloor 128/4 \rfloor = 32$ multiples of 4, which are non-squarefree ($\mu = 0$). At most 96 values can be non-zero, so the prefix sum is bounded by $|\text{residual}| \le 96 < 128$.
 
-For smaller inputs, `STRIDE_LOG` can be raised to 9 or 10 (`-DSIEVE_STRIDE_LOG=9`) to shrink the coarse array and improve cache friendliness. For large inputs, `STRIDE_LOG = 8` (the default) is safe well beyond any practical sieve range.
+For smaller inputs, `STRIDE_LOG` can be raised to 9 or 10 (`-DSIEVE_STRIDE_LOG=9`) to shrink the coarse array and improve cache friendliness. For large inputs, `STRIDE_LOG = 8` (the default) has a very large heuristic margin but no worst-case proof; `STRIDE_LOG = 7` is the rigorous configuration.
 
 ---
 
@@ -246,6 +246,7 @@ The binding constraint depends on configuration:
 | Log-encoding byte overflow | $\sim 1.8 \times 10^{19}$ ($N < 2^{64}$) | Fundamental encoding limit (ceil scheme, §5) |
 | Bucket scheduler (`LP_SIZE=512`) | $2.05 \times 10^{17}$ | `BUCKET_SIEVE=1` (default) |
 | UInt32 primes | $1.8 \times 10^{19}$ | `BUCKET_SIEVE=0` (co-binding with the encoding) |
+| Division-free quotient cache | $2^{60}-2^{32}$ | `DIVISION_FREE=1` |
 | Int8 residual (`STRIDE_LOG=8`) | $1.9 \times 10^{25}$ | Compressed Mertens only |
 
-With default settings, the bucket scheduler is the most restrictive at $2.05 \times 10^{17}$. Building with `BUCKET_SIEVE=0` raises the effective limit to $\sim 1.8 \times 10^{19}$ (the encoding and UInt32 prime caps, which coincide in order of magnitude). The uniform ceil-log2 encoding (§5) is collision-free, so unlike the earlier mixed floor/`numbits` scheme there is no $1.157 \times 10^{18}$ cap.
+With default settings, the bucket scheduler is the most restrictive at $2.05 \times 10^{17}$. Building with `BUCKET_SIEVE=0` raises the effective limit to $2^{60}-2^{32}$ when division-free quotient arithmetic remains enabled, or to roughly $1.8 \times 10^{19}$ when it is disabled. The uniform ceil-log2 encoding (§5) is collision-free; the similar-looking division-free limit belongs to quotient arithmetic, not log compactification.

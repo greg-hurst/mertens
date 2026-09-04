@@ -1,6 +1,6 @@
 # MertensHurst
 
-A high-performance implementation of the Mertens function $M(n) = \sum_{k=1}^{n} \mu(k)$, using the classical $O(n^{2/3})$ combinatorial algorithm ([Hurst 2026](https://arxiv.org/abs/2607.07566)). Computes $M(n)$ for values up to $10^{25}$.
+A high-performance implementation of the Mertens function $M(n) = \sum_{k=1}^{n} \mu(k)$, using the classical $O(n^{2/3})$ combinatorial algorithm ([Hurst 2026](https://arxiv.org/abs/2607.07566)). Accepts inputs through $10^{26}$; completed results have been independently verified through $10^{25}$.
 
 This code was used to set the record for computing the Mertens function.
 
@@ -25,6 +25,7 @@ make q2     # build the original all-Q2 reference binary
 make s2-unordered  # build the coherent period-36/unordered-S2 profile
 make q30-coupled   # build the complete coupled Q=30 profile
 make q210-coupled  # build the fastest complete Q=210 profile
+make q210-coupled-record  # Q=210 with rigorously bounded Int8 residuals
 make q210-coupled-native  # build the pre-ladder Q=210 baseline
 make clean  # remove build artifacts
 ```
@@ -52,6 +53,12 @@ masks and two monotone child maps are temporary and released before Loop 2
 (about 249 MB at $10^{25}$). The Q=210 coefficient table occupies about
 1.35 MiB and is also released before Loop 2. Use `q210-coupled-native` for
 the exact pre-ladder baseline.
+
+For rigorously bounded compressed residuals on a large run,
+`q210-coupled-record` builds the same Q=210 algorithm with
+`SIEVE_STRIDE_LOG=7`. The ordinary profile retains the faster stride 8; its
+byte residual has a very conservative statistical margin but does not have
+the stride-7 worst-case proof.
 
 Loop 0 groups every eligible factor-13 root; Loop 1 does so only when the
 root argument is at most $10^{18}$, leaving wider roots as two factor-11
@@ -92,12 +99,12 @@ Both `DIVISION_FREE` and `BUCKET_SIEVE` produce identical numerical results. The
 ./build/mertens <n> [options]
 ```
 
-where `n` is an integer with $10^8 \le n \le 10^{25}$, in plain decimal or scientific notation (`1e22`, `2.5e21`).
+where `n` is an integer with $10^8 \le n \le 10^{26}$, in plain decimal or scientific notation (`1e22`, `2.5e21`). The selected split must also satisfy $\lfloor\text{nuRatio}\sqrt n\rfloor > 13860$; with the default ratio 0.9 this requires approximately $n \ge 2.372 \times 10^8$.
 
 Options:
 
 - `--profile` (or `-p`): print a timing breakdown by computation phase, along with the parameter values used.
-- `--segment-cap <len>`: cap on the sieve segment length in the large-segment phase, in integers (default: 12000000000, about 12 GB — the sieve costs roughly one byte per integer). Larger segments mean fewer sieve passes but more memory; the value is rounded up to a multiple of the stencil period (13860). Raise it for very large inputs (the $10^{25}$ record run used $4 \times 10^{11}$, about 400 GB) if you have the RAM.
+- `--segment-cap <len>`: cap on the sieve segment length in the large-segment phase, in integers (default: 12000000000, about 12 GB — plus compressed-prefix state). Larger segments mean fewer sieve passes but more memory; the value is rounded up to a multiple of the stencil period (13860). Raise it for very large inputs (the $10^{25}$ record run used $4 \times 10^{11}$) if you have the RAM; budget the full memory model in `INPUT_BOUNDS.md` before a $10^{26}$ run.
 - `--u <value>`: set the sieve truncation point $u$ directly, bypassing the default formula. Must satisfy $0 < u < n$. Hard caps are enforced at runtime per build: $u \le 2.05 \times 10^{17}$ with the bucket scheduler (the default), and $u \lesssim 1.8 \times 10^{19}$ always (UInt32 primes / byte encoding). On `DIVISION_FREE=1` builds also keep $u < 2^{60} - 2^{32}$ (see `INPUT_BOUNDS.md` constraints 3-5). Larger $u$ shifts work from S1/S2 summation into sieving; smaller $u$ does the opposite.
 - `--u-factor <value>`: override the scaling factor in the $u$ formula: $u = \lceil \text{factor} \cdot (n / \ln \ln n)^{2/3} \rceil$. Must be positive. The default factor is $\max(0.30, \min(0.55, 0.55 - 0.025(\log_{10} n - 16)))$: $0.55$ through $10^{16}$, decreasing by $0.025$ per decade to $0.30$ at $10^{26}$. Mutually exclusive with `--u`.
 - `--nu-ratio <value>`: S1/S2 split ratio (default: $0.9$). Controls the boundary between the S1 (Mertens sum) and S2 (Möbius sum) ranges via $\nu(x) = \lfloor \text{ratio} \cdot \sqrt{x} \rfloor$. Must be positive. Affects only performance, not correctness.
@@ -123,7 +130,7 @@ To use as a library in your own code:
 ```cpp
 #include "MertensHurst.h"
 
-Int64 result = MertensHurst(n);                          // 10^8 <= n <= 10^25
+Int64 result = MertensHurst(n);                          // default split: 2.372e8 <= n <= 1e26
 Int64 result = MertensHurst(n, true);                    // with profiling output
 Int64 result = MertensHurst(n, false, 50000000000ULL);   // custom Loop 2 segment cap
 Int64 result = MertensHurst(n, false, 12000000000ULL,

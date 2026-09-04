@@ -1,6 +1,6 @@
 # Build flags
 
-Every flag here is a performance knob. None of them change results: all configurations produce identical $\mu$ and $M$ values, and the sieve's checksum tests verify that.
+Within the documented range of each storage and quotient configuration, these flags produce identical $\mu$ and $M$ values. Some flags also change the range for which their representation has a hard proof; those distinctions are called out below.
 
 Flags marked *(make)* are Makefile variables, e.g. `make BUCKET_SIEVE=0`. The rest are plain compiler defines, passed via the hook in every Makefile:
 
@@ -26,6 +26,6 @@ make EXTRA_CXXFLAGS="-DSIEVE_LP_SIZE=1024 -DSIEVE_STRIDE_LOG=7"
 | `SIEVE_M1_CONSTANT_PRIME_CAP` | 1021 | Upper bound for M1 medium primes handled by compile-time constant-stride tables. It may be retuned from 353 through 2,039. |
 | `SIEVE_M1_PRIME_CAP` | 32000 | Upper bound for M1 medium primes processed by the four-stream M1 walk. This is hardware-dependent and can be retuned independently of the stencil period. |
 | `SIEVE_LP_SIZE` | 512 | Bucket ring size (power of two from 2 through 1024). The largest schedulable prime is `(LP_SIZE - 1) * M2`, so this sets the sieve's range cap: 512 gives $2.05 \times 10^{17}$, 1024 gives $8.23 \times 10^{17}$. MertensHurst's runtime cap on $u$ picks this up automatically. |
-| `SIEVE_STRIDE_LOG` | 8 | Compressed-Mertens stride as log2 ($2^8 = 256$). 7 makes residual overflow impossible at the cost of doubling the coarse array; 9-10 shrink it further for small ranges. See `PERFORMANCE.md` §8. |
+| `SIEVE_STRIDE_LOG` | 8 | Compressed-Mertens stride as log2 ($2^8 = 256$). 7 makes residual overflow impossible at the cost of doubling the coarse and prefix-helper arrays; 8 has a very large heuristic safety margin but no worst-case proof. Strides 9-10 are for smaller ranges only. See `PERFORMANCE.md` §8. |
 
 The one true constant is `STENCIL_PERIOD` (13860): the pre-sieved stencil data is generated for exactly that period, so it is not a knob.

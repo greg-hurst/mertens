@@ -17,7 +17,7 @@ The repository contains two independent implementations of the Mertens function 
 
 | Component | Algorithm | Complexity | Known Range | Reference |
 |-----------|-----------|------------|-------|-----------|
-| [MertensHurst](MertensHurst/) | Hurst | $O(n^{2/3})$ | $10^8 \le n \le 10^{25}$ | |
+| [MertensHurst](MertensHurst/) | Hurst | $O(n^{2/3})$ | accepts $10^{26}$; verified to $10^{25}$ | |
 | [MertensHT](MertensHT/) | Helfgott-Thompson | $O(n^{3/5})$ | tested up to $10^{23}$ | [Helfgott-Thompson 2021](https://arxiv.org/abs/2101.08773) |
 | [sieve](sieve/) | Segmented Möbius sieve | $O(N \log \log N)$ | $2^{64}$ | |
 

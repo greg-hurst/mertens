@@ -169,7 +169,9 @@ auto primes = SegmentedMobiusSieveCore::primesUpTo(std::max(360, sqrtN));
 
 // Compressed mode (default) — point lookups via getM macro
 SegmentedMertensSieveCore sieve(segSize);
-UInt64 numIntervals = (segSize + 255) >> 8;
+UInt64 numIntervals =
+    (segSize + SegmentedMertensSieveCore::STRIDE - 1)
+    >> SegmentedMertensSieveCore::STRIDE_LOG;
 std::vector<Int64> M(numIntervals);
 Int64 MPrev = 0;
 
@@ -233,12 +235,13 @@ M(20) = -3
 
 ## Range limits
 
-With default settings, the effective sieve limit is $2.05 \times 10^{17}$ (bucket scheduler constraint). Building with `BUCKET_SIEVE=0` raises this to $\sim 1.8 \times 10^{19}$ (encoding byte-overflow / UInt32 prime cap). See [PERFORMANCE.md](PERFORMANCE.md) for the full analysis of each constraint:
+With default settings, the effective sieve limit is $2.05 \times 10^{17}$ (bucket scheduler constraint). With `BUCKET_SIEVE=0`, the limit is $2^{60}-2^{32}$ when `DIVISION_FREE=1`, or roughly $1.8 \times 10^{19}$ when direct division is used. See [PERFORMANCE.md](PERFORMANCE.md) for the full analysis of each constraint:
 
 - **Log-prime encoding** — the uniform ceil-log2 scheme is collision-free; the only cap is the 7-bit field overflowing, at $N < 2^{64} \approx 1.8 \times 10^{19}$ (§5)
 - **Bucket scheduler** — `LP_SIZE = 512` limits range to $\sim 2.05 \times 10^{17}$ (§6)
 - **UInt32 primes** — caps sieve endpoint at $\sim 1.8 \times 10^{19}$ (§7)
-- **Int8 residual overflow** — compressed Mertens safe to $\sim 1.9 \times 10^{25}$ at default `STRIDE_LOG=8` (§8)
+- **Division-free quotient cache** — requires the endpoint below $2^{60}-2^{32}$ (§3)
+- **Int8 residual overflow** — default `STRIDE_LOG=8` has a heuristic range near $1.9 \times 10^{25}$; stride 7 has a proof for every range (§8)
 
 ## Files
 

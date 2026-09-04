@@ -25,6 +25,7 @@
 #include "S1.h"
 
 #include <algorithm>
+#include <cmath>
 #include <type_traits>
 #include <vector>
 
@@ -349,8 +350,21 @@ static inline std::vector<S1Q6WorkItem> buildS1Q6Worklist(
     UInt32 compactCount,
     UInt64 N
 ) {
+    UInt64 root = static_cast<UInt64>(std::sqrt(static_cast<long double>(N)));
+    while (root != 0 && root > N / root) --root;
+    while (root + 1 <= N / (root + 1)) ++root;
+
+    // The coprime-to-6 square-free count differs from half the total by
+    // less than 2*sqrt(N)+3. This bound avoids a second full hash2 pass and
+    // prevents vector growth when the historical compactCount/2 estimate
+    // lands just below the exact count.
+    const std::size_t reserveCount = std::min(
+        std::size_t(compactCount),
+        std::size_t(compactCount) / 2 + std::size_t(2) * std::size_t(root) + 5
+    );
+
     std::vector<S1Q6WorkItem> work;
-    work.reserve(compactCount / 2 + 1);
+    work.reserve(reserveCount);
     for (UInt32 index = 1; index <= compactCount; ++index) {
         const UInt32 k = hash2[index];
         if (k == 0 || k > N) break;

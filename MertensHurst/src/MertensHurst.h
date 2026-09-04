@@ -3,7 +3,9 @@
 // ============================================================================
 // MertensHurst.h — Compute the Mertens function M(n).
 //
-// Single entry point: MertensHurst(n) for 10^8 <= n <= 10^25.
+// Single entry point: MertensHurst(n), with absolute input bounds
+// 10^8 <= n <= 10^26. The default split additionally needs n >= 2.372e8.
+// The q210-coupled-record build gives a rigorous Int8 residual bound.
 //
 // Internally uses an O(n^{2/3}) combinatorial algorithm:
 //   1. Initial sieve of mu over [1, nu] to identify squarefree indices
@@ -16,11 +18,11 @@
 
 // segmentCap:  cap on the sieve segment length for the large-segment phase,
 //              in integers (the sieve costs about one byte per integer).
-//              Default 12e9 (~12 GB); increase for very large n (e.g. 10^25).
+//              Default 12e9 (~12 GB); increase for very large n (e.g. 10^26).
 //              Rounded up to nearest multiple of STENCIL_PERIOD (13860).
 //
 // uOverride:  set the sieve truncation point directly (0 = use formula).
-//              Must satisfy: 0 < u < n, u <= 1.157e18.
+//              Must satisfy 0 < u < n and the build-specific sieve cap.
 //
 // uFactor:    override the scaling factor in the u formula (0.0 = use default).
 //              u = ceil(uFactor * (n / log(log(n)))^{2/3}).

@@ -329,18 +329,22 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         qCache.init(dCAP);
     }
 
-    // Compressed M: coarse[i] = M at every 256th position, R[i] = Int8 offset
-    // from the nearest coarse sample. Lookup is M(k) = coarse[k>>8] + R[k].
+    // Compressed M: coarse[i] = M at every STRIDEth position, R[i] = Int8
+    // offset from the interval's coarse sample.
     // 4x smaller than full Int32, which matters a lot for S1 cache behavior.
     //
     // Loop 0 uses Int16 coarse (safe up to n ~ 7.6e9),
     // Loop 1 switches to Int32 for the rest of [1, nuMax].
     constexpr int M_LOG_STRIDE = SegmentedMertensSieveCore::STRIDE_LOG;
+    constexpr UInt64 M_STRIDE = UInt64(1) << M_LOG_STRIDE;
+    auto coarseLength = [](UInt64 length) {
+        return (length + M_STRIDE - 1) >> M_LOG_STRIDE;
+    };
 
-    std::vector<Int16> M16(B >> M_LOG_STRIDE, 0);
+    std::vector<Int16> M16(coarseLength(B), 0);
     Int16 M16Prev = 0;
 
-    std::vector<Int32> M32(B >> M_LOG_STRIDE, 0);
+    std::vector<Int32> M32(coarseLength(B), 0);
     Int32 MPrev = 0;
 
     std::vector<Int8> R(B, 0);
@@ -665,7 +669,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     const UInt64 segmentCapRounded = BF * ((segmentCap + BF - 1) / BF);
     B = 20 * 96 * BF * static_cast<UInt64>((std::ceil(std::sqrt(2.0 * u)) + 1) / BF + 1);
     B = std::min(B, segmentCapRounded);
-    M32.resize(B >> M_LOG_STRIDE);
+    M32.resize(coarseLength(B));
 
     mSieve.mobiusSieve().fillFromStencil(B);
 

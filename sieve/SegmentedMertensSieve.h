@@ -10,8 +10,8 @@
 //
 //   Compressed (default):
 //     M(x) = coarse[x >> STRIDE_LOG] + residual[x]
-//     Coarse stores M at every 256th position; residual stores the offset
-//     from the nearest coarse sample (as Int8). Ideal for point lookups
+//     Coarse stores M at every STRIDEth position; residual stores the offset
+//     from the interval's coarse sample (as Int8). Ideal for point lookups
 //     (e.g., billions of getM calls in S1 hot loops).
 //
 //   Direct:
@@ -21,7 +21,7 @@
 //
 // Two sieve modes (Compressed only):
 //   sieve()       — separate R buffer (Loop 0/1: mu buffer is preserved)
-//   sieveInPlace() — R aliases the mu buffer (Loop 2: saves ~12GB at large n)
+//   sieveInPlace() — R aliases the mu buffer (Loop 2: saves one segment buffer)
 //
 // In Direct mode, sieveInPlace() writes M values directly to the output
 // array and the mu buffer is always preserved (since output is a separate
@@ -353,8 +353,7 @@ private:
                 R[k] = local;
             }
 
-            local = (Int8)(local + MuStart);
-            intervalSums[b] = (MIntT)local;
+            intervalSums[b] = MIntT(local) + MIntT(MuStart);
         }
 
         // Stage B: parallel prefix-sum over intervalSums
@@ -530,8 +529,7 @@ private:
                 }
             }
 
-            local = (Int8)(local + MuStart);
-            intervalSums[b] = (MIntT)local;
+            intervalSums[b] = MIntT(local) + MIntT(MuStart);
         }
 
         // Stage B: parallel prefix-sum over intervalSums (identical to prefixSum).

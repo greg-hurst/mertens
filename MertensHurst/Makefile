@@ -254,6 +254,8 @@ Q210_NATIVE_CXXFLAGS = $(FIXED_BASE_CXXFLAGS) \
                        -DMERTENSHURST_Q210_COUPLED=1
 Q210_CXXFLAGS = $(Q210_NATIVE_CXXFLAGS) \
                 -DMERTENSHURST_S1_Q30030_LADDER=1
+Q210_RECORD_CXXFLAGS = $(Q210_CXXFLAGS) \
+                       -USIEVE_STRIDE_LOG -DSIEVE_STRIDE_LOG=7
 
 Q210_VALIDATE_CXXFLAGS = $(FIXED_BASE_CXXFLAGS) \
                          -DMERTENSHURST_FULL_RECOVERY=0 \
@@ -295,7 +297,7 @@ SRCS     = $(SRCDIR)/MertensHurst.cpp $(SIEVEDIR)/SegmentedMobiusSieve.cpp $(SRC
 
 .PHONY: all q2 s2-unordered q6-zero-complete q6-zero-complete-validate \
         optimized optimized-validate q30-coupled q30-coupled-validate \
-        q210-coupled q210-coupled-validate q210-coupled-sanitize \
+        q210-coupled q210-coupled-record q210-coupled-validate q210-coupled-sanitize \
         q210-coupled-native q210-coupled-fallback \
         full-recovery clean
 
@@ -318,6 +320,8 @@ q30-coupled: $(BUILDDIR)/mertens_q30_coupled
 q30-coupled-validate: $(BUILDDIR)/mertens_q30_coupled_validate
 
 q210-coupled: $(BUILDDIR)/mertens_q210_coupled
+
+q210-coupled-record: $(BUILDDIR)/mertens_q210_coupled_record
 
 q210-coupled-validate: $(BUILDDIR)/mertens_q210_coupled_validate
 
@@ -368,6 +372,10 @@ $(BUILDDIR)/mertens_q30_coupled_validate: Makefile $(SRCS) $(wildcard $(SRCDIR)/
 $(BUILDDIR)/mertens_q210_coupled: Makefile $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
 	@mkdir -p $(BUILDDIR)
 	$(CXX) $(Q210_CXXFLAGS) $(SRCS) -o $@ $(LDFLAGS)
+
+$(BUILDDIR)/mertens_q210_coupled_record: Makefile $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
+	@mkdir -p $(BUILDDIR)
+	$(CXX) $(Q210_RECORD_CXXFLAGS) $(SRCS) -o $@ $(LDFLAGS)
 
 $(BUILDDIR)/mertens_q210_coupled_validate: Makefile $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
 	@mkdir -p $(BUILDDIR)

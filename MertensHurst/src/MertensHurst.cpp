@@ -249,7 +249,7 @@ void releaseVector(std::vector<T>& values) {
 
 // ============================================================================
 // Bounds on n: see INPUT_BOUNDS.md for the full analysis.
-// The code enforces 10^8 <= n <= 10^25.
+// The code enforces 10^8 <= n <= 10^26.
 // ============================================================================
 
 // Compute primes up to ceil(sqrt(limit)), respecting the sieve's minimum bound.
@@ -281,7 +281,7 @@ private:
 
     template<bool StoreHash, bool StoreRecoverySigns>
     void initializeBounds(
-        UInt128 n, UInt64 u,
+        UInt128 n, UInt64 u, UInt32 outerCount,
         const Int8* mu,
         std::vector<UInt128>& partialArgs128,
         std::vector<UInt64>& partialArgs,
@@ -346,7 +346,7 @@ UInt64 MertensComputer::getSegmentSize(UInt128 n, UInt64 u) {
 
 template<bool StoreHash, bool StoreRecoverySigns>
 void MertensComputer::initializeBounds(
-    UInt128 n, UInt64 u,
+    UInt128 n, UInt64 u, UInt32 outerCount,
     const Int8* mu,
     std::vector<UInt128>& partialArgs128,
     std::vector<UInt64>& partialArgs,
@@ -359,7 +359,7 @@ void MertensComputer::initializeBounds(
     std::vector<UInt64>& s2SplitCache,
     std::vector<UInt64>& negativeRecoverySigns
 ) {
-    const UInt32 end = static_cast<UInt32>(n / u) + 1;
+    const UInt32 end = outerCount + 1;
     UInt32 i = 1;
 
     for (UInt32 j = 1; j < end; ++j) {
@@ -410,10 +410,10 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         std::abort();
     }
 
-    // n <= 10^25
-    if (__builtin_expect(n > UInt128(1000000000000ULL) * UInt128(10000000000000ULL), false)) {
-        std::cerr << "Error: MertensComputer::compute requires n <= 10^25. "
-                  << "See \"Upper bounds on n\" in MertensHurst.cpp to extend." << std::endl;
+    // n <= 10^26
+    if (__builtin_expect(n > UInt128(10000000000000ULL) * UInt128(10000000000000ULL), false)) {
+        std::cerr << "Error: MertensComputer::compute requires n <= 10^26. "
+                  << "See INPUT_BOUNDS.md to extend." << std::endl;
         std::abort();
     }
 
@@ -454,6 +454,12 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         // UInt32 prime storage: sqrt(u) < 2^32. This also guarantees the
         // ceil-log2 byte-encoding requirement u < 2^64.
         UInt64 uMax = 4294967295ULL * 4294967295ULL;
+        if constexpr (UseDivisionFree) {
+            // ceilDiv forms x + p - 1, which must remain below 2^60.
+            constexpr UInt64 quotientCacheMax =
+                (UInt64(1) << 60) - (UInt64(1) << 32) - 1;
+            uMax = std::min(uMax, quotientCacheMax);
+        }
 #if USE_BUCKET_SIEVE
         // Bucket scheduler reach: sqrt(u) <= (LP_SIZE - 1) * M2.
         constexpr UInt64 reach = SegmentedMobiusSieveCore::schedulerReach();
@@ -471,21 +477,36 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         std::cerr << "Error: u must be less than n (got u=" << u << ")." << std::endl;
         std::abort();
     }
-    // Log-compactification sieve cap (see INPUT_BOUNDS.md constraint 5)
-    if (u > 1157000000000000000ULL) {
-        std::cerr << "Error: u exceeds log-compactification sieve cap of ~1.157e18 "
-                  << "(got u=" << u << "). Decrease --u or --u-factor." << std::endl;
+    // n/u is the outer-index extent. The S1/S2 boundary for each argument y
+    // is nu_y = floor(nuRatio*sqrt(y)).
+    const UInt128 outerCount128 = n / u;
+    if (__builtin_expect(
+            outerCount128 >= UInt128(std::numeric_limits<UInt32>::max()),
+            false)) {
+        std::cerr << "Error: n/u must be less than UINT32_MAX. "
+                  << "Increase --u or --u-factor." << std::endl;
         std::abort();
     }
-    // nu = n/u controls the S1/S2 boundary: S2 sums over [y/u, kappa_y],
-    // S1 sums over [1, nu_y]. Sieve range is [1, nu_max] where nu_max = nu_1 = n/u.
-    UInt64 nu = n / u;
+    const UInt32 outerCount = static_cast<UInt32>(outerCount128);
+    const UInt64 nu = outerCount;
     UInt64 B = std::min(min_B, getSegmentSize(n, u));
+
+    // Every main-loop configuration needs at least one stencil-aligned
+    // segment strictly below nuMax. This matters for ratios below one on
+    // small inputs, where the historical segment heuristic tracks sqrt(n).
+    const UInt64 initialNuMax = get_nu(n);
+    if (__builtin_expect(initialNuMax <= BF, false)) {
+        std::cerr << "Error: nuRatio is too small for n: floor(nuRatio*sqrt(n)) "
+                  << "must exceed " << BF << ". Increase --nu-ratio or n."
+                  << std::endl;
+        std::abort();
+    }
+    B = std::min(B, BF * ((initialNuMax - 1) / BF));
 
     // Round up to stencil alignment
     const UInt64 nuCAP = BF * (nu / BF + 1);
 
-    Int32 mx = 0;
+    UInt32 mx = 0;
     std::vector<UInt32> primes;
     std::vector<UInt32> hash;
     std::vector<UInt32> hash2;
@@ -525,10 +546,10 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         }
         partialArgsDivU.resize(mx+1);
         if constexpr (!UseFullRecovery)
-            negativeRecoverySigns.resize(static_cast<UInt32>(mx) / 64 + 1);
+            negativeRecoverySigns.resize(mx / 64 + 1);
 
         initializeBounds<NeedsOuterHash, !UseFullRecovery>(
-            n, u, initialSieve.data(), partialArgs128, partialArgs, nusVec,
+            n, u, outerCount, initialSieve.data(), partialArgs128, partialArgs, nusVec,
             kappas, kappas2, partialArgsDivU, hash, hash2, s2SplitCache,
             negativeRecoverySigns
         );
@@ -536,7 +557,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 
     std::vector<UInt64> qcache;
     if constexpr (!UseS1OuterQ6)
-        qcache.resize(2*mx+2, 0);
+        qcache.resize(std::size_t(mx) * 2 + 2, 0);
 
     const UInt64 nuMax = nusVec[1];
     const UInt32 cnt128 = partialArgs128.size()-1;
@@ -603,7 +624,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 #endif
     if constexpr (UseS1OuterQ6) {
         s1Q6Worklist = buildS1Q6Worklist(
-            hash2.data(), static_cast<UInt32>(mx), nu
+            hash2.data(), mx, nu
         );
         if constexpr (UseQ6ZeroCompletion) {
             for (const S1Q6WorkItem& item : s1Q6Worklist) {
@@ -690,6 +711,17 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             >();
 #endif
 #endif
+        const std::size_t unusedWorklistCapacity =
+            s1Q6Worklist.capacity() - s1Q6Worklist.size();
+        // Release a material Q30/Q210 reduction, but do not copy the full
+        // Q6 list merely to trim the small reserve-bound margin.
+        if (unusedWorklistCapacity != 0
+            && unusedWorklistCapacity >= s1Q6Worklist.capacity() / 8) {
+            std::vector<S1Q6WorkItem> compactWorklist(
+                s1Q6Worklist.begin(), s1Q6Worklist.end()
+            );
+            s1Q6Worklist.swap(compactWorklist);
+        }
         if constexpr (UseQ6CompactHotState)
             useQ6CompactHotState = useQ6ZeroCompletion;
         if constexpr (!UseCoherentQ6) {
@@ -1181,8 +1213,8 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         qCache.init(dCAP);
     }
 
-    // Compressed M: coarse[i] = M at every 256th position, R[i] = Int8 offset
-    // from the nearest coarse sample. Lookup is M(k) = coarse[k>>8] + R[k].
+    // Compressed M: coarse[i] = M at every STRIDEth position, R[i] = Int8
+    // offset from the nearest coarse sample.
     // 4x smaller than full Int32, which matters a lot for S1 cache behavior.
     //
     // Loop 0 uses Int16 coarse (safe up to n ~ 7.6e9),
@@ -1212,7 +1244,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 
     // kappa_y * M(nu_y) correction term. picked up incrementally as nu
     // values land in processed sieve segments.
-    Int32 j = mx;
+    UInt32 j = mx;
     UInt64 osqrt = nusVec[j];
     Int64 coherentBoundaryIndex = static_cast<Int64>(q6CommonNu.size()) - 1;
 
@@ -1220,10 +1252,10 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     // needs to be > cbrt(n) so chunks stay in the quotient predictor range.
     std::vector<Chunk> chunks;
     UInt64 CHUNK_LEN = BF * (static_cast<UInt64>(4.0 * std::cbrt((double)n)) / BF + 1);
-    Int32 mx0 = 1, mx1 = mx;
+    UInt32 mx0 = 1, mx1 = mx;
     while (mx0 < mx && nusVec[mx0] > CHUNK_LEN) { ++mx0; }
 
-    if (mx0 >= (Int32)(nu/2)) {
+    if (mx0 >= nu / 2) {
         std::cerr << "Error: u is too large (u=" << u << ", nu=" << nu << ", mx0=" << mx0
                   << "). Decrease --u or --u-factor." << std::endl;
         std::abort();
@@ -2920,7 +2952,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                     }
                 }
             } else if (s2SegmentLo <= L2) {
-                for (UInt32 i = 1; i <= (UInt32)mx0; ++i) {
+                for (UInt32 i = 1; i <= mx0; ++i) {
                     if (isS2Active(i)) {
                         const UInt64 m = std::min(L2, nusVec[i]);
                         if (s2SegmentLo > m) { mx0 = i-1; break; }
@@ -2954,7 +2986,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                     while (mx1 > mx0 && nusVec[mx1] < s2SegmentLo) { --mx1; }
 
                     #pragma omp parallel for schedule(dynamic, 1)
-                    for (UInt64 i = mx0+1; i <= (UInt64)mx1; ++i) {
+                    for (UInt64 i = UInt64(mx0) + 1; i <= mx1; ++i) {
                         if (isS2Active(static_cast<UInt32>(i))) {
                             const bool currentHalf = isCurrentHalf(
                                 static_cast<UInt32>(i)
@@ -3027,7 +3059,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                     const Int64 mval = static_cast<Int64>(
                         GET_M(_MP, RP, L1, osqrt)
                     );
-                    if (__builtin_expect((UInt32)j > cnt128, true))
+                    if (__builtin_expect(j > cnt128, true))
                         partialValues[j] += static_cast<Int64>(kappas[j]) * mval;
                     else
                         partialValues128[j] += kappas[j] * static_cast<Int128>(mval);
@@ -3148,7 +3180,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         assert(q6WorkIndexByCompact.empty());
     } else if (useQ6ZeroCompletion) {
         std::size_t hotPosition = 0;
-        for (UInt32 index = 1; index <= static_cast<UInt32>(mx); ++index) {
+        for (UInt32 index = 1; index <= mx; ++index) {
             if (hotPosition < s1Q6Worklist.size()
                 && s1Q6Worklist[hotPosition].compactIndex == index) {
                 ++hotPosition;
@@ -3185,7 +3217,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         } else {
             recovered = recoverSquarefreeFinalValue(
                 partialValues, partialValues128, cnt128, negativeRecoverySigns,
-                static_cast<UInt32>(mx)
+                mx
             );
         }
         if constexpr (UseUnorderedS2)
@@ -3199,13 +3231,13 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         START_PROFILE();
         if (cnt128 > 0) {
             partialValues128.resize(partialValues.size());
-            for (UInt32 i = cnt128+1; i <= (UInt32)mx; ++i)
+            for (UInt32 i = cnt128+1; i <= mx; ++i)
                 partialValues128[i] = (Int128)partialValues[i];
 
-            recoverSquarefreeInPlace(partialValues128, hash, static_cast<UInt32>(nu));
+            recoverSquarefreeInPlace(partialValues128, hash, outerCount);
             result = (Int64)partialValues128[1];
         } else {
-            recoverSquarefreeInPlace(partialValues, hash, static_cast<UInt32>(nu));
+            recoverSquarefreeInPlace(partialValues, hash, outerCount);
             result = partialValues[1];
         }
         END_PROFILE(t[8]);

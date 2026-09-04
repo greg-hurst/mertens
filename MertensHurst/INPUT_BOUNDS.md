@@ -2,23 +2,23 @@
 
 This document catalogs the constraints that limit the supported input `UInt128 n`. It aims to be exhaustive, but there may be additional constraints not yet identified. Each entry notes which source file(s) the constraint originates from, and what would need to change to relax it.
 
-The imposed bounds are $10^8 \le n \le 10^{25}$. The lower bound is discussed in constraint 0; the upper bounds (constraints 1-10) are ordered from most restrictive to least restrictive.
+The imposed absolute bounds are $10^8 \le n \le 10^{26}$. Correctness has been verified by completed computations through $10^{25}$; $10^{26}$ is accepted after the runtime and structural checks below but remains unverified until that computation is completed independently.
 
 ---
 
-## 0. Lower bound: $10^8 \leq n$
+## 0. Lower bound and split guard
 
 **Source:** `MertensHurst.cpp`, `SegmentedMobiusSieve.h`
 
-The algorithm produces incorrect results for small $n$. The primary cause is structural: the minimum viable sieve segment size is `B == BF == STENCIL_PERIOD == 13860`, and the main sieve loop `while (L2 < nu_max)` only executes when the combined S2 and S1 ranges exceed one segment. Since `nu_max == 0.9*sqrt(n)` by default, the loop requires `B < nu_max`, which implies $n > (13860 / 0.9)^2 = 2.372 \times 10^8$. Inputs between the absolute $10^8$ floor and this default threshold require a larger explicit `nuRatio`.
+The minimum viable sieve segment size is `B == BF == STENCIL_PERIOD == 13860`, and the main sieve loop requires `B < nu_max`. The implementation reduces its initial segment to the largest stencil multiple below `nu_max` and rejects the configuration if `nu_max <= BF`; it no longer continues with an empty main loop.
 
-More generally, if the split is changed to `nu_max = c*sqrt(n)`, then this structural threshold becomes roughly $(13860/c)^2$. Decreasing the split constant therefore raises the lower input bound, and the enforced $10^8$ lower limit should be revisited whenever this tuning is changed.
+Since `nu_max == floor(0.9*sqrt(n))` by default, this requires approximately $n \ge 2.372 \times 10^8$. Inputs between the absolute $10^8$ floor and this default threshold require a larger explicit `nuRatio`.
 
-Below this threshold, neither S2 nor S1 updates are performed: `partial_values` remains at its initial value of $1$ for every entry, and the final recovery produces garbage.
+More generally, if the split is changed to `nu_max = c*sqrt(n)`, then this structural threshold becomes roughly $(13860/c)^2$. Decreasing the split constant therefore raises the parameter-dependent lower input bound.
 
 Additional reasons the algorithm is not designed for small $n$:
 
-- **Segment-size and chunk-size formulas are tuned for large inputs.** `getSegmentSize`, the S2 chunking parameter `CHUNK_LEN`, and the Loop 2 segment size all use heuristics (e.g., $\sqrt{n}$, $n^{1/3}$, $\sqrt{2u}$) that become degenerate when their values fall below `STENCIL_PERIOD`. For `n < BF^2` $\approx 1.92 \times 10^8$, `getSegmentSize` returns the bare minimum of `BF`, leaving no room for the sieve range to span multiple segments.
+- **Segment-size and chunk-size formulas are tuned for large inputs.** `getSegmentSize`, the S2 chunking parameter `CHUNK_LEN`, and the Loop 2 segment size all use heuristics (e.g., $\sqrt{n}$, $n^{1/3}$, $\sqrt{2u}$). The initial size is clamped against the actual split before allocation.
 
 - **The S2 mode-splitting assumes non-trivial sub-ranges.** The multi-mode S2 dispatch divides the summation range $[1, \nu]$ at boundaries like $\nu/6$, $\nu/3$, $\nu/2$. For small $n$, the per-argument `nus[i] == get_nu(n/i)` shrinks rapidly with `i`, and some mode sub-ranges may become empty. While empty ranges are handled gracefully, the algorithm has not been validated in this regime.
 
@@ -50,6 +50,11 @@ With the tuned default factor (which reaches its $0.30$ floor at $10^{26}$): **m
 
 **Note:** This bound is enforced at runtime in `MertensHurst.cpp` for every source of $u$ (default formula, `--u`, or `--u-factor`), via `SegmentedMobiusSieveCore::schedulerReach()`. Builds with `USE_BUCKET_SIEVE=0` are subject only to constraints 4, 5, and 8.
 
+At $n=10^{26}$ with the default factor, $\sqrt u \approx 158.9$ million.
+This is below both the full 512-bucket reach (453,277,440) and the
+226,638,720 half-reach used by the optional two-$p$ mod-4 skip. Therefore
+neither `LP_SIZE=1024` nor a mod-4-path change is needed at this input.
+
 ---
 
 ## 4. Quotient cache domain (`DIVISION_FREE=1` builds only)
@@ -62,7 +67,7 @@ $$u < 2^{60} - 2^{32} = 1\,152\,921\,500\,311\,879\,680 \approx 1.1529 \times 10
 
 Inverting the tuned default $u(n)$ formula (`fac == 0.30` at this scale), the smallest input whose sieve range reaches this bound is **max $n \approx 3.2 \times 10^{28}$**. This remains below the encoding/prime caps of constraints 5 and 8, although other algorithmic limits may bind first.
 
-`SegmentedMobiusSieveCore::sieve()` asserts the bound at entry (active only in non-`NDEBUG` builds); it is not otherwise enforced at runtime, so on a `DIVISION_FREE=1` release build a manual $u$ above $2^{60} - 2^{32}$ computes incorrect quotients. In the default configuration this window is unreachable, since the bucket-scheduler cap of constraint 3 ($2.05 \times 10^{17}$) is enforced first. Build with `DIVISION_FREE=0` to remove this constraint entirely.
+`SegmentedMobiusSieveCore::sieve()` asserts the bound at entry, and `MertensHurst` folds the exact inclusive maximum $(2^{60}-2^{32})-1$ into its build-aware runtime cap. In the default configuration the bucket-scheduler cap of constraint 3 ($2.05 \times 10^{17}$) binds first. Build with `DIVISION_FREE=0` to remove this constraint entirely.
 
 ---
 
@@ -86,11 +91,13 @@ The largest quotients arise in two sub-ranges of the 128-bit loop. In the "fast"
 
 ---
 
-## 7. `UInt32` hash indices
+## 7. `UInt32` outer and compact indices
 
 **Source:** `MertensHurst.cpp`
 
-The `hash` and `hash2` lookups use `UInt32` indices up to $\nu \sim n^{1/3}$. This overflows when $\nu > 2^{32} \approx 4.29 \times 10^9$, which implies **$n < 7.9 \times 10^{28}$**.
+The initial outer extent $\lfloor n/u\rfloor$, the compact square-free count, and the `hash`/`hash2` indices use `UInt32`. The runtime requires $n/u < 2^{32}-1$ before narrowing. Under the tuned default factor this becomes the first structural ceiling at approximately **$n = 1.275 \times 10^{26}$**, above the imposed $10^{26}$ cap.
+
+At $n=10^{26}$, the current floating-point formula gives $u \approx 2.52632 \times 10^{16}$ (the last digits are libm-dependent), $\lfloor n/u\rfloor=3\,958\,326\,568$, and exactly $2\,406\,374\,010$ square-free outer entries. All fit in `UInt32`; the square-free count does not fit in `Int32`, which is why the outer counters are unsigned.
 
 ---
 
@@ -98,7 +105,7 @@ The `hash` and `hash2` lookups use `UInt32` indices up to $\nu \sim n^{1/3}$. Th
 
 **Source:** `SegmentedMobiusSieve.h`
 
-Primes are stored as `UInt32`, which caps them at $\sim 4.29 \times 10^9$. Since the largest prime is $\sqrt{u}$, we must have $u < 1.8 \times 10^{19}$ and therefore **$n < 7.9 \times 10^{28}$**.
+Primes are stored as `UInt32`, which caps them at $\sim 4.29 \times 10^9$. Since the largest prime is $\sqrt{u}$, we must have $u < 1.8 \times 10^{19}$ and therefore **$n \lesssim 2.0 \times 10^{30}$** under the tuned default formula.
 
 ---
 
@@ -114,16 +121,29 @@ $$\max |M(x+H) - M(x)| \sim \sqrt{\frac{12H}{\pi^2}\cdot\log\left(\frac{X}{H}\ri
 
 Setting this equal to 128 (`Int8` limit) gives expected overflow at:
 
-| `STRIDE_LOG` | $H$  | max $u$       | max $n$         |
-|--------------|------|---------------|--------------------------|
-| 7            | 128  | $\infty$      | $\infty$                 |
-| 8            | 256  | $1.9 \times 10^{25}$ | $6 \times 10^{38}$ |
-| 9            | 512  | $1.4 \times 10^{14}$ | $1.1 \times 10^{22}$ |
-| 10           | 1024 | $5.3 \times 10^{8}$  | $4.2 \times 10^{13}$ |
+| `STRIDE_LOG` | $H$  | heuristic max $u$ |
+|--------------|------|--------------------|
+| 7            | 128  | $\infty$ (proved)  |
+| 8            | 256  | $1.9 \times 10^{25}$ |
+| 9            | 512  | $1.4 \times 10^{14}$ |
+| 10           | 1024 | $5.3 \times 10^{8}$  |
 
 At `STRIDE_LOG = 7` ($H = 128$), overflow is mathematically impossible: every interval of 128 consecutive integers contains at least $\lfloor 128/4 \rfloor = 32$ multiples of 4, which are non-squarefree and have $\mu = 0$. At most 96 values can be non-zero, so the prefix sum is bounded by $|\text{residual}| \le 96 < 128$.
 
-Verified: no overflow observed up to $u = 13\\,694\\,622\\,981\\,236\\,974$ (the value of $u$ used at $n = 10^{25}$). For smaller inputs, `STRIDE_LOG` can be increased to `9` (for roughly $n < 1.1 \times 10^{22}$) or `10` (for roughly $n < 4.2 \times 10^{13}$), or decreased to `7` for a hard guarantee of no overflow at the cost of doubling the coarse `M` array. This shrinks (or grows) the coarse `M` array and affects cache friendliness.
+Verified: no overflow observed up to $u = 13\,694\,622\,981\,236\,974$ in the completed $10^{25}$ computation. The default stride 8 remains heuristic rather than a proof at $10^{26}$. `make q210-coupled-record` selects `STRIDE_LOG=7`, giving the hard bound above; the ordinary Q210 target retains stride 8 for maximum speed. Strides 9 and 10 are appropriate only for smaller ranges covered by the table.
+
+---
+
+## Practical memory at $10^{26}$
+
+With the tuned default $u$ and a segment cap of $4 \times 10^{11}$, the
+largest Loop 2 segment alone needs about 414 GB in the ordinary stride-8
+build: 400 GB for the in-place sieve, plus the coarse Mertens array and its
+prefix helpers. Retained outer state brings the estimated process peak to
+roughly 452--454 GB before allocator and runtime overhead. The rigorous
+stride-7 record build doubles the coarse and prefix-helper counts, raising
+the estimate to roughly 466--468 GB. Choose the segment cap from available
+RAM; lowering it changes performance, not the answer.
 
 ---
 

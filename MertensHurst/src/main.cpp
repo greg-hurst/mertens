@@ -55,7 +55,7 @@ static std::string toString(UInt128 v) {
 static void printUsage(const char* prog) {
     std::cerr << "Usage: " << prog << " <n> [options]" << std::endl;
     std::cerr << std::endl;
-    std::cerr << "  n                    integer with 10^8 <= n <= 10^25;"
+    std::cerr << "  n                    integer with 10^8 <= n <= 10^26;"
                  " scientific notation accepted (1e22, 2.5e21)" << std::endl;
     std::cerr << std::endl;
     std::cerr << "Options:" << std::endl;
@@ -69,6 +69,7 @@ static void printUsage(const char* prog) {
     std::cerr << std::endl;
     std::cerr << "  --u and --u-factor are mutually exclusive." << std::endl;
     std::cerr << "  Bounds: 0 < u < n. u-factor > 0. nu-ratio > 0. Hard caps on u are enforced per build (see INPUT_BOUNDS.md)." << std::endl;
+    std::cerr << "  floor(nu-ratio * sqrt(n)) must exceed 13860." << std::endl;
 }
 
 int main(int argc, char* argv[]) {

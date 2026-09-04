@@ -1,11 +1,11 @@
 # Build flags
 
-All performance-only: every configuration computes the same $M(n)$. The Makefile passes these through to the shared sieve, whose own knobs are documented in [`../sieve/COMPILE_FLAGS.md`](../sieve/COMPILE_FLAGS.md).
+Within their documented input domains, every configuration computes the same $M(n)$. The Makefile passes the sieve controls through to the shared library, whose bounds and knobs are documented in [`../sieve/COMPILE_FLAGS.md`](../sieve/COMPILE_FLAGS.md).
 
 | Flag | Default | What it does |
 |---|---|---|
 | `DIVISION_FREE` | 1 on x86, 0 on ARM | Quotient strategy for the hot $S_1$/$S_2$ loops and the sieve. On ARM, hardware division is fast and the direct path wins. On x86 the division-free path (Granlund-Montgomery cache + quotient predictor) wins. Auto-detected; override with `make DIVISION_FREE=0/1`. |
-| `BUCKET_SIEVE` | 1 | Large-prime bucket scheduler in the sieve. `make BUCKET_SIEVE=0` removes the enforced $u \le 2.05 \times 10^{17}$ cap (the binding constraint becomes $\sim 1.8 \times 10^{19}$, see `INPUT_BOUNDS.md`), at a large speed cost on long sieve ranges. |
+| `BUCKET_SIEVE` | 1 | Large-prime bucket scheduler in the sieve. `make BUCKET_SIEVE=0` removes the $u \le 2.05 \times 10^{17}$ scheduler cap, at a large speed cost. The next cap is $2^{60}-2^{32}$ when `DIVISION_FREE=1`, or the roughly $1.8 \times 10^{19}$ encoding/prime limit when it is off. |
 | `SIEVE_BUCKET_NARROW_ENTRY` | 1 | Bucket entry format, passed to the sieve. Narrow (prime-only) is fastest on the ARM record machines; wide may win on x86. Details in the sieve flags doc. |
 | `FUSED_FINALIZE` | 1 | Fold Möbius finalization into the Mertens prefix scan in Loop 2, avoiding a separate pass over the sieve buffer. Becomes `-DSIEVE_FUSED_FINALIZE`. |
 | `S1_OUTER_Q6` | 1 | Exact outer $Q=6$ transform for $S_1$. Set this and `S2_OUTER_Q6` to `0`, or use `make q2`, to build the original all-$Q=2$ reference path. |
@@ -38,8 +38,13 @@ AddressSanitizer and UndefinedBehaviorSanitizer.
 `make q210-coupled-fallback` forces the Q210-to-Q30 runtime fallback in the
 same validation profile.
 
+`make q210-coupled-record` builds the production Q210 contract with
+`SIEVE_STRIDE_LOG=7`. This gives the compressed `Int8` Mertens residual a
+worst-case proof for record-scale runs. The ordinary target retains the
+slightly faster stride 8, whose much larger practical range is heuristic.
+
 The MertensHurst Makefile names its narrow-entry setting `SIEVE_BUCKET_NARROW_ENTRY`; the standalone sieve Makefile names the corresponding setting `NARROW_ENTRY`. Both produce the compiler define `SIEVE_NARROW_ENTRY`.
 
 Any sieve define can be passed through the hook, e.g. `make EXTRA_CXXFLAGS="-DSIEVE_LP_SIZE=1024"`.
 
-The runtime cap on $u$ is build-aware: it is computed from the actual compiled constants (including `SIEVE_LP_SIZE`), so an out-of-range `--u` or `--u-factor` fails fast with a pointer to `INPUT_BOUNDS.md` instead of silently corrupting the sieve.
+The runtime cap on $u$ is build-aware: it is computed from `SIEVE_LP_SIZE`, the prime/encoding domain, and the division-free quotient domain when enabled. An out-of-range `--u` or `--u-factor` fails fast with a pointer to `INPUT_BOUNDS.md` instead of silently corrupting the sieve.
