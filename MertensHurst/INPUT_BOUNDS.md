@@ -10,7 +10,7 @@ The imposed bounds are $10^8 \le n \le 10^{25}$. The lower bound is discussed in
 
 **Source:** `MertensHurst.cpp`, `SegmentedMobiusSieve.h`
 
-The algorithm produces incorrect results for small $n$. The primary cause is structural: the minimum viable sieve segment size is `B == BF == STENCIL_PERIOD == 13860`, and the main sieve loop `while (L2 < nu_max)` only executes when the combined S2 and S1 ranges exceed one segment. Since `nu_max == 1.4*sqrt(n)` by default, the loop requires `B < nu_max`, which implies $n > (13860 / 1.4)^2 = 9.801 \times 10^7$.
+The algorithm produces incorrect results for small $n$. The primary cause is structural: the minimum viable sieve segment size is `B == BF == STENCIL_PERIOD == 13860`, and the main sieve loop `while (L2 < nu_max)` only executes when the combined S2 and S1 ranges exceed one segment. Since `nu_max == 0.9*sqrt(n)` by default, the loop requires `B < nu_max`, which implies $n > (13860 / 0.9)^2 = 2.372 \times 10^8$. Inputs between the absolute $10^8$ floor and this default threshold require a larger explicit `nuRatio`.
 
 More generally, if the split is changed to `nu_max = c*sqrt(n)`, then this structural threshold becomes roughly $(13860/c)^2$. Decreasing the split constant therefore raises the lower input bound, and the enforced $10^8$ lower limit should be revisited whenever this tuning is changed.
 

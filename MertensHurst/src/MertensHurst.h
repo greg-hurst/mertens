@@ -28,6 +28,6 @@
 //              Mutually exclusive with uOverride.
 //
 // nuRatio:    S1/S2 split ratio. get_nu(x) = floor(nuRatio * sqrt(x)).
-//              Default 1.4. Must be > 0. Affects performance, not correctness.
+//              Default 0.9. Must be > 0. Affects performance, not correctness.
 Int64 MertensHurst(UInt128 n, bool profile = false, UInt64 segmentCap = 12000000000ULL,
-                   UInt64 uOverride = 0, double uFactor = 0.0, double nuRatio = 1.4);
+                   UInt64 uOverride = 0, double uFactor = 0.0, double nuRatio = 0.9);

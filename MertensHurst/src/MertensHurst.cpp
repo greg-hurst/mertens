@@ -320,9 +320,9 @@ UInt64 MertensComputer::isqrt_u128(const UInt128& a) {
     return x;
 }
 
-// nu_y = floor(c * sqrt(y)), c = 1.4 by default. Bigger c means more
+// nu_y = floor(c * sqrt(y)), c = 0.9 by default. Bigger c means more
 // work in S1 (cheap per-term: just an array lookup) and less in S2
-// (expensive: sums over M). 1.4 roughly balances sieve, S1, and S2.
+// (expensive: sums over M). 0.9 is tuned for the production Q210 path.
 UInt64 MertensComputer::get_nu(const UInt128& x) {
     return static_cast<UInt64>(mNuRatio * static_cast<double>(isqrt_u128(x)));
 }
