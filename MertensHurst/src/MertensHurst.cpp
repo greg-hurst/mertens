@@ -3203,9 +3203,9 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         releaseVector(q6BoundaryFactor);
     }
 
-    // Loop 2 only does S1 (S2 is done after Loop 0/1), so segments can be
-    // much larger — up to ~12 billion elements — to cut down on the
-    // per-segment cost of sweeping over partial values.
+    // Loop 2 only does S1 (S2 is done after Loop 0/1), so its stored-entry
+    // budget can be much larger — about 12 billion bytes by default — to cut
+    // down on the per-segment cost of sweeping over partial values.
     const UInt64 segmentCapRounded = BF * ((segmentCap + BF - 1) / BF);
     B = 20 * 96 * BF * static_cast<UInt64>((std::ceil(std::sqrt(2.0 * u)) + 1) / BF + 1);
     B = std::min(B, segmentCapRounded);
@@ -3315,16 +3315,26 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         releaseVector(M32);
 
         if (oddIdentityStart <= u) {
+            if (B > std::numeric_limits<UInt64>::max() / 2) {
+                std::cerr << "Internal error: odd Loop 2 segment overflow."
+                          << std::endl;
+                std::abort();
+            }
+
+            // B is a storage budget. The packed odd sieve stores one entry
+            // for every two original integers, so B entries cover a span of
+            // 2*B in the public original-coordinate interface.
+            const UInt64 oddSegmentSpan = 2 * B;
             if (profile) getDayTime(start);
-            SegmentedOddMertensSieveCore oddSieve(B);
-            const UInt64 packedCapacity = B / 2 + (B & 1);
+            SegmentedOddMertensSieveCore oddSieve(oddSegmentSpan);
+            const UInt64 packedCapacity = B;
             M32.resize(
                 (packedCapacity + SegmentedOddMertensSieveCore::STRIDE - 1)
                 >> SegmentedOddMertensSieveCore::STRIDE_LOG
             );
 #if MERTENSHURST_ODD_LOOP2_VALIDATE
             SegmentedOddMertensSieveCoreT<OddMertensStorage::Direct>
-                referenceOddSieve(B);
+                referenceOddSieve(oddSegmentSpan);
             std::vector<Int32> referenceOddM(packedCapacity);
             Int32 referenceOddPrev = oddMertensPrev;
 #endif
@@ -3336,7 +3346,10 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             Int32* oddMP = M32.data();
             UInt64 oddL1 = oddLoop2Seam;
             while (oddL1 <= u) {
-                const UInt64 oddL2 = std::min(oddL1 + B - 1, u);
+                const UInt64 oddSegmentLength = std::min(
+                    oddSegmentSpan, u - oddL1 + 1
+                );
+                const UInt64 oddL2 = oddL1 + oddSegmentLength - 1;
                 const Int32 segmentOddMertensPrev = oddMertensPrev;
 
                 if (profile) getDayTime(start);

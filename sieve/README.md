@@ -202,8 +202,10 @@ Compressed mode has two sieve methods:
 
 `SegmentedOddMobiusSieveCore` and `SegmentedOddMertensSieveCore` are native
 packed sieves for odd arguments. They do not run the full sieve and filter its
-output. Public bounds and segment capacities remain in original integer
-coordinates. For inclusive `[lo, hi]`,
+output. Their standalone public bounds and capacities remain in original
+integer coordinates. MertensHurst translates its stored-entry cap into twice
+that original-coordinate span for packed odd Loop 2 segments. For inclusive
+`[lo, hi]`,
 
 ```text
 firstOdd = first odd integer >= lo

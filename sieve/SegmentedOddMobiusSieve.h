@@ -8,9 +8,8 @@
 //
 //   data[i] = mu(firstOdd() + 2*i),  0 <= i < oddCount().
 //
-// No even entries are allocated or visited.  In particular, initialize() takes
-// an original-integer span (the same unit as SegmentedMobiusSieveCore and
-// --segment-cap), while capacity() explicitly reports packed odd slots.
+// No even entries are allocated or visited.  initialize() takes an
+// original-integer span, while capacity() explicitly reports packed odd slots.
 //
 // The native sieve mirrors the full sieve's three hot phases:
 //   1. packed odd stencil plus small and M1 primes;

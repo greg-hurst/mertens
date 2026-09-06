@@ -16,8 +16,8 @@
 
 #include "types.h"
 
-// segmentCap:  cap on the sieve segment length for the large-segment phase,
-//              in integers (the sieve costs about one byte per integer).
+// segmentCap:  cap on stored sieve entries for the large-segment phase
+//              (the sieve costs about one byte per entry).
 //              Default 12e9 (~12 GB); increase for very large n (e.g. 10^26).
 //              Rounded up to nearest multiple of STENCIL_PERIOD (13860).
 //

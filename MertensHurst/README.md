@@ -65,21 +65,25 @@ and sieves $M_2$ natively in packed odd coordinates. The two signed terms are
 applied at their respective segment visits to the same existing S1 row and
 accumulator. A short full-M bridge handles the phase seam exactly; Loop 0/1,
 S2, unordered S2, recovery, and the factor-11/factor-13 ladder are unchanged.
-The ordinary `q210-coupled` target remains the compile-time fallback.
+The bridge uses smaller temporary chunks so allocator-retained bridge pages do
+not overlap a second full-size allocation. The main odd phase still consumes
+the full stored-entry budget. The ordinary `q210-coupled` target remains the
+compile-time fallback.
 
 Fixed-parameter measurements on the 32-thread M3 Ultra (`nuRatio=0.9`,
 `u-factor=0.5`, segment cap $4\times10^{11}$) gave:
 
-| Input | Full-M total | Odd total | Speedup | Peak RSS reduction |
+| Input | Full-M total | Odd total | Speedup | Peak RSS change |
 |---:|---:|---:|---:|---:|
-| $10^{16}$ | 0.9869 s | 0.9075 s | 1.087x | about 24% |
-| $10^{19}$ | 89.2612 s | 78.7242 s | 1.134x | 23.1% |
-| $10^{20}$ | 406.399 s | 350.960 s | 1.158x | 23.2% |
+| $10^{16}$ | 1.0084 s | 0.8814 s | 1.144x | about +22% |
+| $10^{19}$ | 89.2612 s | 77.5044 s | 1.152x | +23.1% |
 
-The $10^{16}$ times are medians of 12 alternating runs per binary; the larger
-rows are isolated representative runs. At $10^{20}$, Loop-2 sieve time fell
-from 143.025 s to 83.297 s. The second signed S1 visit added 4.494 s, only
-7.5% of the 59.728 s sieve saving.
+The $10^{16}$ times are medians of 12 alternating runs per binary; the
+$10^{19}$ row uses isolated representative runs. At $10^{19}$, Loop-2 sieve
+time fell from 29.4047 s to 16.6669 s. The second signed S1 visit added 1.0804
+s, only 8.5% of the 12.7378 s sieve saving. The odd path uses the same primary
+byte-entry budget as the full path; its additional prefix metadata explains
+the measured RSS increase.
 
 For rigorously bounded compressed residuals on a large run,
 `q210-coupled-record` builds the same Q=210 algorithm with
@@ -133,7 +137,7 @@ where `n` is an integer with $10^8 \le n \le 10^{26}$, in plain decimal or scien
 Options:
 
 - `--profile` (or `-p`): print a timing breakdown by computation phase, along with the parameter values used.
-- `--segment-cap <len>`: cap on the sieve segment length in the large-segment phase, in integers (default: 12000000000, about 12 GB — plus compressed-prefix state). Larger segments mean fewer sieve passes but more memory; the value is rounded up to a multiple of the stencil period (13860). Raise it for very large inputs (the $10^{25}$ record run used $4 \times 10^{11}$) if you have the RAM; budget the full memory model in `INPUT_BOUNDS.md` before a $10^{26}$ run.
+- `--segment-cap <len>`: cap on stored sieve entries in the large-segment phase (default: 12000000000, about 12 GB — plus compressed-prefix state). The full sieve stores one entry per integer; the packed odd Loop 2 sieve stores one entry per odd integer and therefore covers roughly twice the integer span at the same cap. Larger caps mean fewer sieve passes but more memory; the value is rounded up to a multiple of the stencil period (13860). Raise it for very large inputs (the $10^{25}$ record run used $4 \times 10^{11}$) if you have the RAM; budget the full memory model in `INPUT_BOUNDS.md` before a $10^{26}$ run.
 - `--u <value>`: set the sieve truncation point $u$ directly, bypassing the default formula. Must satisfy $0 < u < n$. Hard caps are enforced at runtime per build: $u \le 2.05 \times 10^{17}$ with the bucket scheduler (the default), and $u \lesssim 1.8 \times 10^{19}$ always (UInt32 primes / byte encoding). On `DIVISION_FREE=1` builds also keep $u < 2^{60} - 2^{32}$ (see `INPUT_BOUNDS.md` constraints 3-5). Larger $u$ shifts work from S1/S2 summation into sieving; smaller $u$ does the opposite.
 - `--u-factor <value>`: override the scaling factor in the $u$ formula: $u = \lceil \text{factor} \cdot (n / \ln \ln n)^{2/3} \rceil$. Must be positive. The default factor is $\max(0.30, \min(0.55, 0.55 - 0.025(\log_{10} n - 16)))$: $0.55$ through $10^{16}$, decreasing by $0.025$ per decade to $0.30$ at $10^{26}$. Mutually exclusive with `--u`.
 - `--nu-ratio <value>`: S1/S2 split ratio (default: $0.9$). Controls the boundary between the S1 (Mertens sum) and S2 (Möbius sum) ranges via $\nu(x) = \lfloor \text{ratio} \cdot \sqrt{x} \rfloor$. Must be positive. Affects only performance, not correctness.

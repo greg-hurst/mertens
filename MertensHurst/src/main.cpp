@@ -60,7 +60,7 @@ static void printUsage(const char* prog) {
     std::cerr << std::endl;
     std::cerr << "Options:" << std::endl;
     std::cerr << "  --profile, -p        print timing breakdown by computation phase" << std::endl;
-    std::cerr << "  --segment-cap <len>  cap on the Loop 2 sieve segment length, in integers"
+    std::cerr << "  --segment-cap <len>  cap on stored Loop 2 sieve entries"
                  " (default: 12000000000, about 12 GB)" << std::endl;
     std::cerr << "  --u <value>          set the sieve truncation point directly" << std::endl;
     std::cerr << "  --u-factor <value>   set the u scaling factor"
