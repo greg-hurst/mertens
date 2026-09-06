@@ -61,10 +61,12 @@ SRC      = SegmentedMobiusSieve.cpp SegmentedOddMobiusSieve.cpp
 
 DEMOS = $(BUILDDIR)/demo_mobius_core \
         $(BUILDDIR)/demo_odd_mobius_core \
+        $(BUILDDIR)/demo_coprime6_mobius_core \
         $(BUILDDIR)/demo_mobius_segmented \
         $(BUILDDIR)/demo_mobius_values \
         $(BUILDDIR)/demo_mertens_core \
         $(BUILDDIR)/demo_odd_mertens_core \
+        $(BUILDDIR)/demo_coprime6_mertens_core \
         $(BUILDDIR)/demo_mertens_segmented \
         $(BUILDDIR)/demo_mertens_value \
         $(BUILDDIR)/demo_mertens_values
@@ -76,6 +78,22 @@ all: $(DEMOS)
 $(BUILDDIR)/%: $(DEMODIR)/%.cpp $(SRC) $(wildcard *.h)
 	@mkdir -p $(BUILDDIR)
 	$(CXX) $(CXXFLAGS) -I. $< $(SRC) -o $@ $(LDFLAGS)
+
+$(BUILDDIR)/demo_coprime6_mobius_core: \
+        $(DEMODIR)/demo_coprime6_mobius_core.cpp \
+        SegmentedMobiusSieve.cpp SegmentedCoprime6MobiusSieve.cpp \
+        $(wildcard *.h)
+	@mkdir -p $(BUILDDIR)
+	$(CXX) $(CXXFLAGS) -I. $< SegmentedMobiusSieve.cpp \
+		SegmentedCoprime6MobiusSieve.cpp -o $@ $(LDFLAGS)
+
+$(BUILDDIR)/demo_coprime6_mertens_core: \
+        $(DEMODIR)/demo_coprime6_mertens_core.cpp \
+        SegmentedMobiusSieve.cpp SegmentedCoprime6MobiusSieve.cpp \
+        $(wildcard *.h)
+	@mkdir -p $(BUILDDIR)
+	$(CXX) $(CXXFLAGS) -I. $< SegmentedMobiusSieve.cpp \
+		SegmentedCoprime6MobiusSieve.cpp -o $@ $(LDFLAGS)
 
 clean:
 	rm -rf $(BUILDDIR)

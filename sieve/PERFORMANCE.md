@@ -265,6 +265,40 @@ byte residual is exact with a worst-case proof.
 
 ---
 
+## 12. Native packed wheel-6 sieve
+
+`SegmentedCoprime6MobiusSieveCore` stores only the two residue classes coprime
+to 6. Its global packed sequence is $1,5,7,11,13,17,\ldots$. A 770-entry
+stencil covers factors 5, 7, and 11; the M1 and M2 units remain 110,880 and
+887,040 bytes, matching the established cache geometry. Each prime uses two
+independent packed lanes with stride $2p$, which exposes four or more
+independent writes in the direct kernels.
+
+The large-prime scheduler retains one live entry per prime and alternates the
+two exact packed gaps. It does not duplicate persistent entries for the two
+wheel residues. If $R=(\mathtt{LP\_SIZE}-1)M_2$, the conservative schedulable
+prime bound is $(3R-1)/4$; with the default 512 buckets this is 339,958,079.
+The packed wheel has no mod-4 forwarding skip.
+
+A development benchmark over $[10^{12},10^{12}+10^8-1]$, excluding prime
+generation, construction, and checksum traversal, measured:
+
+| Threads | Full sieve | Packed wheel-6 sieve | Speedup |
+|---:|---:|---:|---:|
+| 1 | 0.057994 s | 0.030027 s | 1.931x |
+| 32 | 0.003870 s | 0.003000 s | 1.290x |
+
+These short equal-span measurements validate the intended direction; the
+integrated Mertens result depends on both the reduced sieve work and the extra
+signed $M_6$ visits and is measured separately.
+
+The corresponding Mertens representation computes
+$M_6(x)=\sum_{n\le x,(n,6)=1}\mu(n)$ directly in packed coordinates. As for
+the odd core, a 256-entry block has only 255 transitions of magnitude at most
+one, so the shifted signed-byte residual has a worst-case proof.
+
+---
+
 ## Summary of range constraints
 
 The binding constraint depends on configuration:
