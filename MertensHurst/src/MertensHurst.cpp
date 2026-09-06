@@ -18,12 +18,12 @@
 #define MERTENSHURST_S1_Q30030_FORCE_Q210_FALLBACK 0
 #endif
 
-#ifndef MERTENSHURST_ODD_LOOP2
-#define MERTENSHURST_ODD_LOOP2 0
+#ifndef MERTENSHURST_LOOP2_SIEVE_P
+#define MERTENSHURST_LOOP2_SIEVE_P 1
 #endif
 
-#ifndef MERTENSHURST_ODD_LOOP2_VALIDATE
-#define MERTENSHURST_ODD_LOOP2_VALIDATE 0
+#ifndef MERTENSHURST_LOOP2_SIEVE_VALIDATE
+#define MERTENSHURST_LOOP2_SIEVE_VALIDATE 0
 #endif
 
 #include "MertensHurst.h"
@@ -45,7 +45,7 @@
 #endif
 #include "OuterRecovery.h"
 #include "SegmentedMertensSieve.h"
-#if MERTENSHURST_ODD_LOOP2
+#if MERTENSHURST_LOOP2_SIEVE_P == 2
 #include "SegmentedOddMertensSieve.h"
 #endif
 
@@ -202,19 +202,20 @@ static_assert(!UseQ210Coupled
               "coupled Q210 requires the final-value compact unordered stack");
 #endif
 
-static constexpr bool UseOddLoop2 = MERTENSHURST_ODD_LOOP2;
-static_assert(MERTENSHURST_ODD_LOOP2 == 0
-              || MERTENSHURST_ODD_LOOP2 == 1,
-              "MERTENSHURST_ODD_LOOP2 must be 0 or 1");
-static_assert(!UseOddLoop2 || MERTENSHURST_Q210_COUPLED,
-              "odd Loop 2 requires the native Q210 contract");
-static constexpr bool ValidateOddLoop2 =
-    MERTENSHURST_ODD_LOOP2_VALIDATE;
-static_assert(MERTENSHURST_ODD_LOOP2_VALIDATE == 0
-              || MERTENSHURST_ODD_LOOP2_VALIDATE == 1,
-              "MERTENSHURST_ODD_LOOP2_VALIDATE must be 0 or 1");
-static_assert(!ValidateOddLoop2 || UseOddLoop2,
-              "odd Loop 2 validation requires the odd Loop 2 path");
+static constexpr UInt32 Loop2SieveP = MERTENSHURST_LOOP2_SIEVE_P;
+static_assert(Loop2SieveP == 1 || Loop2SieveP == 2,
+              "MERTENSHURST_LOOP2_SIEVE_P must be 1 or 2");
+static constexpr bool UseRestrictedLoop2 = Loop2SieveP != 1;
+static constexpr bool UseOddLoop2 = Loop2SieveP == 2;
+static_assert(!UseRestrictedLoop2 || MERTENSHURST_Q210_COUPLED,
+              "restricted Loop 2 requires the native Q210 contract");
+static constexpr bool ValidateLoop2Sieve =
+    MERTENSHURST_LOOP2_SIEVE_VALIDATE;
+static_assert(MERTENSHURST_LOOP2_SIEVE_VALIDATE == 0
+              || MERTENSHURST_LOOP2_SIEVE_VALIDATE == 1,
+              "MERTENSHURST_LOOP2_SIEVE_VALIDATE must be 0 or 1");
+static_assert(!ValidateLoop2Sieve || UseRestrictedLoop2,
+              "Loop 2 sieve validation requires P=2");
 
 #ifndef MERTENSHURST_VALIDATE_UNORDERED_S2
 #define MERTENSHURST_VALIDATE_UNORDERED_S2 0
@@ -3214,7 +3215,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     // Main loop #2
     // ========================================================================
 
-#if MERTENSHURST_ODD_LOOP2
+#if MERTENSHURST_LOOP2_SIEVE_P == 2 && MERTENSHURST_Q210_COUPLED
     const bool useOddLoop2 = useQ210Coupled;
     if (useOddLoop2) {
         if (!useQ6CompactHotState
@@ -3224,7 +3225,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             std::abort();
         }
 
-#if MERTENSHURST_ODD_LOOP2_VALIDATE
+#if MERTENSHURST_LOOP2_SIEVE_VALIDATE
         // Expensive oracle build: run the retained full-M Loop 2 from the
         // exact seam into copies of the same row state, then restore the
         // production accumulators.  The comparison below therefore checks
@@ -3332,7 +3333,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 (packedCapacity + SegmentedOddMertensSieveCore::STRIDE - 1)
                 >> SegmentedOddMertensSieveCore::STRIDE_LOG
             );
-#if MERTENSHURST_ODD_LOOP2_VALIDATE
+#if MERTENSHURST_LOOP2_SIEVE_VALIDATE
             SegmentedOddMertensSieveCoreT<OddMertensStorage::Direct>
                 referenceOddSieve(oddSegmentSpan);
             std::vector<Int32> referenceOddM(packedCapacity);
@@ -3359,7 +3360,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 const Int8* oddResidual = oddSieve.mobiusSieve().data();
                 const UInt64 firstOdd = oddSieve.mobiusSieve().firstOdd();
                 oddMertensPrev = oddSieve.getOddMertens(oddMP, oddL2);
-#if MERTENSHURST_ODD_LOOP2_VALIDATE
+#if MERTENSHURST_LOOP2_SIEVE_VALIDATE
                 referenceOddSieve.sieveInPlace(
                     oddL1, oddL2, referenceOddPrev,
                     referenceOddM.data(), primes
@@ -3390,7 +3391,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                         oddMP, oddResidual, firstOdd, quotient
                     );
                 };
-#if MERTENSHURST_ODD_LOOP2_VALIDATE
+#if MERTENSHURST_LOOP2_SIEVE_VALIDATE
                 auto getReferenceOddMertens = [=, &referenceOddM](
                     UInt64 quotient
                 ) {
@@ -3422,7 +3423,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                                     qCache, dCAP, true
                                 );
                         }
-#if MERTENSHURST_ODD_LOOP2_VALIDATE
+#if MERTENSHURST_LOOP2_SIEVE_VALIDATE
                         const Int128 referenceHalfValue =
                             evaluateS1OuterQ210ZeroCompleteWithLookup(
                                 q6PartialArgs128[workIndex] / 2,
@@ -3466,7 +3467,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                                     qCache, dCAP, true
                                 );
                         }
-#if MERTENSHURST_ODD_LOOP2_VALIDATE
+#if MERTENSHURST_LOOP2_SIEVE_VALIDATE
                         const Int64 referenceHalfValue =
                             evaluateS1OuterQ210ZeroCompleteWithLookup(
                                 q6PartialArgs[workIndex] / 2,
@@ -3504,7 +3505,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             }
         }
 
-#if MERTENSHURST_ODD_LOOP2_VALIDATE
+#if MERTENSHURST_LOOP2_SIEVE_VALIDATE
         if (q6CompactValues.size() != expectedLoop2Values.size()
             || q6CompactValues128.size()
                 != expectedLoop2Values128.size()) {
@@ -3714,7 +3715,11 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                   << std::endl;
 #endif
 #endif
-#if MERTENSHURST_ODD_LOOP2
+        std::cout << "Configured Loop 2 sieve P: " << Loop2SieveP
+                  << std::endl;
+#if MERTENSHURST_LOOP2_SIEVE_P == 2 && MERTENSHURST_Q210_COUPLED
+        std::cout << "Active Loop 2 sieve P: "
+                  << (useOddLoop2 ? 2 : 1) << std::endl;
         std::cout << "Odd-only Loop 2: "
                   << (useOddLoop2 ? "active" : "full-M fallback")
                   << std::endl;
@@ -3723,6 +3728,8 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             std::cout << "  packed stride: "
                       << SegmentedOddMertensSieveCore::STRIDE << std::endl;
         }
+#else
+        std::cout << "Active Loop 2 sieve P: 1" << std::endl;
 #endif
         std::cout << std::endl;
         if (t[0] + t[1] + t[2] > 0.0) {
@@ -3741,7 +3748,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             std::cout << "--------------- Loop 2 32-bit ---------------" << std::endl;
             std::cout << "          Sieve: " << t[6] << ", " << (100.0*t[6]/tot) << "%" << std::endl;
             std::cout << "             S1: " << t[7] << ", " << (100.0*t[7]/tot) << "%" << std::endl;
-#if MERTENSHURST_ODD_LOOP2
+#if MERTENSHURST_LOOP2_SIEVE_P == 2 && MERTENSHURST_Q210_COUPLED
             if (useOddLoop2) {
                 std::cout << "   Bridge sieve: " << oddBridgeSieveTime
                           << std::endl;

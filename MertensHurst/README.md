@@ -25,7 +25,9 @@ make q2     # build the original all-Q2 reference binary
 make s2-unordered  # build the coherent period-36/unordered-S2 profile
 make q30-coupled   # build the complete coupled Q=30 profile
 make q210-coupled  # build the complete full-M Loop-2 Q=210 profile
-make q210-coupled-odd-loop2  # fastest measured Q=210 profile
+make q210-coupled-loop2-p1  # explicit compile-time full-M Loop 2
+make q210-coupled-loop2-p2  # explicit compile-time packed-odd Loop 2
+make q210-coupled-odd-loop2  # compatibility alias for the P2 binary
 make q210-coupled-record  # Q=210 with rigorously bounded Int8 residuals
 make q210-coupled-native  # build the pre-ladder Q=210 baseline
 make clean  # remove build artifacts
@@ -55,8 +57,9 @@ masks and two monotone child maps are temporary and released before Loop 2
 1.35 MiB and is also released before Loop 2. Use `q210-coupled-native` for
 the exact pre-ladder baseline.
 
-The experimental `q210-coupled-odd-loop2` target changes only the S1-only
-Loop 2. It uses the exact identity
+The compile-time `LOOP2_SIEVE_P` selector changes only the S1-only Loop 2.
+The `q210-coupled-loop2-p1` target retains full $M$, and
+`q210-coupled-loop2-p2` uses the exact identity
 
 $$M(x)=M_2(x)-M_2(\lfloor x/2\rfloor),\qquad
 M_2(x)=\sum_{\substack{k\le x\\k\text{ odd}}}\mu(k),$$
@@ -67,8 +70,9 @@ accumulator. A short full-M bridge handles the phase seam exactly; Loop 0/1,
 S2, unordered S2, recovery, and the factor-11/factor-13 ladder are unchanged.
 The bridge uses smaller temporary chunks so allocator-retained bridge pages do
 not overlap a second full-size allocation. The main odd phase still consumes
-the full stored-entry budget. The ordinary `q210-coupled` target remains the
-compile-time fallback.
+the full stored-entry budget. A P2 binary whose runtime Q210 guard fails uses
+the compiled full-$M$ fallback. The historical `q210-coupled-odd-loop2`
+targets and binary paths remain aliases for compatibility.
 
 Fixed-parameter measurements on the 32-thread M3 Ultra (`nuRatio=0.9`,
 `u-factor=0.5`, segment cap $4\times10^{11}$) gave:
@@ -105,8 +109,9 @@ The Q=210 profile has dedicated validation builds:
 make q210-coupled-validate      # ordered-square comparison enabled
 make q210-coupled-sanitize      # ASan and UBSan executable
 make q210-coupled-fallback      # validate a forced Q210-to-Q30 fallback
-make q210-coupled-odd-loop2-validate  # full-M and direct-odd row checks
-make q210-coupled-odd-loop2-sanitize  # odd Loop 2 under ASan and UBSan
+make q210-coupled-loop2-p2-validate  # full-M and direct-odd row checks
+make q210-coupled-loop2-p2-sanitize  # P2 Loop 2 under ASan and UBSan
+make q210-coupled-loop2-p2-fallback  # force and validate P2-to-P1 fallback
 ```
 
 ### Division-free mode

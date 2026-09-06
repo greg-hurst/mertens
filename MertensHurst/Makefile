@@ -47,8 +47,8 @@ Q6_ZERO_COMPLETION_VALIDATE ?= 0
 Q6_COMPACT_HOT_STATE ?= 0
 Q30_COUPLED ?= 0
 Q210_COUPLED ?= 0
-ODD_LOOP2 ?= 0
-ODD_LOOP2_VALIDATE ?= 0
+LOOP2_SIEVE_P ?= 1
+LOOP2_SIEVE_VALIDATE ?= 0
 
 # --- Base flags (all platforms) ---
 CXXFLAGS := -O3 -std=c++17 \
@@ -74,8 +74,8 @@ CXXFLAGS := -O3 -std=c++17 \
             -DMERTENSHURST_Q6_COMPACT_HOT_STATE=$(Q6_COMPACT_HOT_STATE) \
             -DMERTENSHURST_Q30_COUPLED=$(Q30_COUPLED) \
             -DMERTENSHURST_Q210_COUPLED=$(Q210_COUPLED) \
-            -DMERTENSHURST_ODD_LOOP2=$(ODD_LOOP2) \
-            -DMERTENSHURST_ODD_LOOP2_VALIDATE=$(ODD_LOOP2_VALIDATE)
+            -DMERTENSHURST_LOOP2_SIEVE_P=$(LOOP2_SIEVE_P) \
+            -DMERTENSHURST_LOOP2_SIEVE_VALIDATE=$(LOOP2_SIEVE_VALIDATE)
 
 # Extra defines, e.g. make EXTRA_CXXFLAGS="-DSIEVE_LP_SIZE=1024 -DSIEVE_STRIDE_LOG=7"
 CXXFLAGS += $(EXTRA_CXXFLAGS)
@@ -108,10 +108,10 @@ CONTRACT_FILTERS = -DMERTENSHURST_FULL_RECOVERY=% \
                    -DMERTENSHURST_Q30_COUPLED -UMERTENSHURST_Q30_COUPLED \
                    -DMERTENSHURST_Q210_COUPLED=% \
                    -DMERTENSHURST_Q210_COUPLED -UMERTENSHURST_Q210_COUPLED \
-                   -DMERTENSHURST_ODD_LOOP2=% \
-                   -DMERTENSHURST_ODD_LOOP2 -UMERTENSHURST_ODD_LOOP2 \
-                   -DMERTENSHURST_ODD_LOOP2_VALIDATE=% \
-                   -DMERTENSHURST_ODD_LOOP2_VALIDATE -UMERTENSHURST_ODD_LOOP2_VALIDATE \
+                   -DMERTENSHURST_LOOP2_SIEVE_P=% \
+                   -DMERTENSHURST_LOOP2_SIEVE_P -UMERTENSHURST_LOOP2_SIEVE_P \
+                   -DMERTENSHURST_LOOP2_SIEVE_VALIDATE=% \
+                   -DMERTENSHURST_LOOP2_SIEVE_VALIDATE -UMERTENSHURST_LOOP2_SIEVE_VALIDATE \
                    -DMERTENSHURST_S1_Q30030_LADDER=% \
                    -DMERTENSHURST_S1_Q30030_LADDER -UMERTENSHURST_S1_Q30030_LADDER \
                    -DMERTENSHURST_S1_Q30030_LADDER_VALIDATE=% \
@@ -260,16 +260,24 @@ Q210_NATIVE_CXXFLAGS = $(FIXED_BASE_CXXFLAGS) \
                        -DMERTENSHURST_Q6_COMPACT_HOT_STATE=1 \
                        -DMERTENSHURST_Q30_COUPLED=1 \
                        -DMERTENSHURST_Q210_COUPLED=1
-Q210_CXXFLAGS = $(Q210_NATIVE_CXXFLAGS) \
-                -DMERTENSHURST_S1_Q30030_LADDER=1
-Q210_ODD_LOOP2_CXXFLAGS = $(Q210_CXXFLAGS) \
-                          -DMERTENSHURST_ODD_LOOP2=1
-Q210_ODD_LOOP2_VALIDATE_CXXFLAGS = $(Q210_ODD_LOOP2_CXXFLAGS) \
-                                   -DMERTENSHURST_ODD_LOOP2_VALIDATE=1 \
-                                   -UNDEBUG
-Q210_ODD_LOOP2_SANITIZE_CXXFLAGS = $(filter-out -O3 -flto -DNDEBUG,$(Q210_ODD_LOOP2_VALIDATE_CXXFLAGS)) \
-                                   -O1 -g -fsanitize=address,undefined \
-                                   -fno-omit-frame-pointer
+Q210_CONTRACT_CXXFLAGS = $(Q210_NATIVE_CXXFLAGS) \
+                         -DMERTENSHURST_S1_Q30030_LADDER=1
+Q210_CXXFLAGS = $(Q210_CONTRACT_CXXFLAGS) \
+                -DMERTENSHURST_LOOP2_SIEVE_P=1 \
+                -DMERTENSHURST_LOOP2_SIEVE_VALIDATE=0
+Q210_LOOP2_P2_CXXFLAGS = $(Q210_CONTRACT_CXXFLAGS) \
+                         -DMERTENSHURST_LOOP2_SIEVE_P=2 \
+                         -DMERTENSHURST_LOOP2_SIEVE_VALIDATE=0
+Q210_LOOP2_P2_VALIDATE_CXXFLAGS = $(Q210_CONTRACT_CXXFLAGS) \
+                                  -DMERTENSHURST_LOOP2_SIEVE_P=2 \
+                                  -DMERTENSHURST_LOOP2_SIEVE_VALIDATE=1 \
+                                  -UNDEBUG
+Q210_LOOP2_P2_SANITIZE_CXXFLAGS = $(filter-out -O3 -flto -DNDEBUG,$(Q210_LOOP2_P2_VALIDATE_CXXFLAGS)) \
+                                  -O1 -g -fsanitize=address,undefined \
+                                  -fno-omit-frame-pointer
+Q210_LOOP2_P2_FALLBACK_CXXFLAGS = $(Q210_LOOP2_P2_VALIDATE_CXXFLAGS) \
+                                  -DMERTENSHURST_S1_Q30030_LADDER_VALIDATE=1 \
+                                  -DMERTENSHURST_S1_Q30030_FORCE_Q210_FALLBACK=1
 Q210_RECORD_CXXFLAGS = $(Q210_CXXFLAGS) \
                        -USIEVE_STRIDE_LOG -DSIEVE_STRIDE_LOG=7
 
@@ -310,11 +318,16 @@ SRCDIR   = src
 BUILDDIR = build
 SIEVEDIR = ../sieve
 SRCS     = $(SRCDIR)/MertensHurst.cpp $(SIEVEDIR)/SegmentedMobiusSieve.cpp $(SRCDIR)/main.cpp
-ODD_SRCS = $(SRCS) $(SIEVEDIR)/SegmentedOddMobiusSieve.cpp
+P1_SRCS  = $(SRCS)
+P2_SRCS  = $(SRCS) $(SIEVEDIR)/SegmentedOddMobiusSieve.cpp
 
 .PHONY: all q2 s2-unordered q6-zero-complete q6-zero-complete-validate \
         optimized optimized-validate q30-coupled q30-coupled-validate \
-        q210-coupled q210-coupled-record q210-coupled-validate q210-coupled-sanitize \
+        q210-coupled q210-coupled-loop2 q210-coupled-loop2-p1 \
+        q210-coupled-loop2-p2 q210-coupled-loop2-p2-validate \
+        q210-coupled-loop2-p2-sanitize q210-coupled-loop2-p2-fallback \
+        q210-coupled-record \
+        q210-coupled-validate q210-coupled-sanitize \
         q210-coupled-native q210-coupled-fallback q210-coupled-odd-loop2 \
         q210-coupled-odd-loop2-validate q210-coupled-odd-loop2-sanitize \
         full-recovery clean
@@ -338,6 +351,18 @@ q30-coupled: $(BUILDDIR)/mertens_q30_coupled
 q30-coupled-validate: $(BUILDDIR)/mertens_q30_coupled_validate
 
 q210-coupled: $(BUILDDIR)/mertens_q210_coupled
+
+q210-coupled-loop2: q210-coupled-loop2-p$(LOOP2_SIEVE_P)
+
+q210-coupled-loop2-p1: $(BUILDDIR)/mertens_q210_coupled_loop2_p1
+
+q210-coupled-loop2-p2: $(BUILDDIR)/mertens_q210_coupled_loop2_p2
+
+q210-coupled-loop2-p2-validate: $(BUILDDIR)/mertens_q210_coupled_loop2_p2_validate
+
+q210-coupled-loop2-p2-sanitize: $(BUILDDIR)/mertens_q210_coupled_loop2_p2_sanitize
+
+q210-coupled-loop2-p2-fallback: $(BUILDDIR)/mertens_q210_coupled_loop2_p2_fallback
 
 q210-coupled-odd-loop2: $(BUILDDIR)/mertens_q210_coupled_odd_loop2
 
@@ -397,17 +422,34 @@ $(BUILDDIR)/mertens_q210_coupled: Makefile $(SRCS) $(wildcard $(SRCDIR)/*.h) $(w
 	@mkdir -p $(BUILDDIR)
 	$(CXX) $(Q210_CXXFLAGS) $(SRCS) -o $@ $(LDFLAGS)
 
-$(BUILDDIR)/mertens_q210_coupled_odd_loop2: Makefile $(ODD_SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
+$(BUILDDIR)/mertens_q210_coupled_loop2_p1: Makefile $(P1_SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
 	@mkdir -p $(BUILDDIR)
-	$(CXX) $(Q210_ODD_LOOP2_CXXFLAGS) $(ODD_SRCS) -o $@ $(LDFLAGS)
+	$(CXX) $(Q210_CXXFLAGS) $(P1_SRCS) -o $@ $(LDFLAGS)
 
-$(BUILDDIR)/mertens_q210_coupled_odd_loop2_validate: Makefile $(ODD_SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
+$(BUILDDIR)/mertens_q210_coupled_loop2_p2: Makefile $(P2_SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
 	@mkdir -p $(BUILDDIR)
-	$(CXX) $(Q210_ODD_LOOP2_VALIDATE_CXXFLAGS) $(ODD_SRCS) -o $@ $(LDFLAGS)
+	$(CXX) $(Q210_LOOP2_P2_CXXFLAGS) $(P2_SRCS) -o $@ $(LDFLAGS)
 
-$(BUILDDIR)/mertens_q210_coupled_odd_loop2_sanitize: Makefile $(ODD_SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
+$(BUILDDIR)/mertens_q210_coupled_loop2_p2_validate: Makefile $(P2_SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
 	@mkdir -p $(BUILDDIR)
-	$(CXX) $(Q210_ODD_LOOP2_SANITIZE_CXXFLAGS) $(ODD_SRCS) -o $@ $(LDFLAGS) -fsanitize=address,undefined
+	$(CXX) $(Q210_LOOP2_P2_VALIDATE_CXXFLAGS) $(P2_SRCS) -o $@ $(LDFLAGS)
+
+$(BUILDDIR)/mertens_q210_coupled_loop2_p2_sanitize: Makefile $(P2_SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
+	@mkdir -p $(BUILDDIR)
+	$(CXX) $(Q210_LOOP2_P2_SANITIZE_CXXFLAGS) $(P2_SRCS) -o $@ $(LDFLAGS) -fsanitize=address,undefined
+
+$(BUILDDIR)/mertens_q210_coupled_loop2_p2_fallback: Makefile $(P2_SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
+	@mkdir -p $(BUILDDIR)
+	$(CXX) $(Q210_LOOP2_P2_FALLBACK_CXXFLAGS) $(P2_SRCS) -o $@ $(LDFLAGS)
+
+$(BUILDDIR)/mertens_q210_coupled_odd_loop2: $(BUILDDIR)/mertens_q210_coupled_loop2_p2
+	@cp $< $@
+
+$(BUILDDIR)/mertens_q210_coupled_odd_loop2_validate: $(BUILDDIR)/mertens_q210_coupled_loop2_p2_validate
+	@cp $< $@
+
+$(BUILDDIR)/mertens_q210_coupled_odd_loop2_sanitize: $(BUILDDIR)/mertens_q210_coupled_loop2_p2_sanitize
+	@cp $< $@
 
 $(BUILDDIR)/mertens_q210_coupled_record: Makefile $(SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
 	@mkdir -p $(BUILDDIR)
