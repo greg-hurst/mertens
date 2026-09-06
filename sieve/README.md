@@ -237,29 +237,6 @@ The low-level `GET_ODD_MERTENS` macro mirrors `GET_M` for hot point lookups.
 `GET_ODD_MERTENS_IN_RANGE` omits the lower-bound branch when the caller proves
 that the query is at or above the segment's first packed odd value.
 
-### Coprime-to-6 sieves
-
-`SegmentedCoprime6MobiusSieveCore` and
-`SegmentedCoprime6MertensSieveCore` store only arguments congruent to 1 or 5
-modulo 6. They are native packed sieves: multiples of 2 and 3 are never
-allocated or visited. Their global packed coordinates are
-
-```text
-originalAt(k) = 6*(k/2) + (k odd ? 5 : 1)
-```
-
-and the public interval bounds remain ordinary integer coordinates. A stored
-entry budget of `B` therefore covers exactly `3*B` original coordinates when
-`B` is even and the segment begins at 1 modulo 6.
-
-The Mertens core computes
-$M_6(x)=\sum_{k\le x,(k,6)=1}\mu(k)$. Its direct and compressed forms retain
-the same 256-packed-entry prefix contract as the odd core, including the
-shifted `Int8` residual proof. Lookups at excluded arguments return the last
-represented prefix value. `GET_COPRIME6_MERTENS` is the checked hot lookup;
-`GET_COPRIME6_MERTENS_IN_RANGE` is the branch-free form for a caller that has
-proved the queried prefix is resident.
-
 ## Demos
 
 ```
@@ -272,8 +249,6 @@ build/demo_mertens_segmented <N> [seg]   # SegmentedMertensSieve iterator
 build/demo_mertens_core <N> [seg]        # SegmentedMertensSieveCore manual loop
 build/demo_odd_mobius_core               # odd-core correctness and benchmark harness
 build/demo_odd_mertens_core              # odd-prefix identity/carry validation
-build/demo_coprime6_mobius_core          # native wheel-6 correctness/benchmark harness
-build/demo_coprime6_mertens_core         # M6 direct/compressed/fused validation
 ```
 
 ```
@@ -320,9 +295,6 @@ SegmentedMertensSieve.h    Mertens sieve: core class, iterator, standalone funct
 SegmentedOddMobiusSieve.h  Native packed odd-only Mobius sieve core
 SegmentedOddMobiusSieve.cpp Odd-only SIMD finalization and bucket scheduler
 SegmentedOddMertensSieve.h Odd-prefix core, iterator, wrappers, and hot lookup
-SegmentedCoprime6MobiusSieve.h Native packed wheel-6 Mobius sieve core
-SegmentedCoprime6MobiusSieve.cpp Wheel-6 direct walks, finalization, and scheduler
-SegmentedCoprime6MertensSieve.h M6 prefix core, iterator, wrappers, and hot lookup
 stencil_data.h             Precomputed 13860-element stencil array
 demo/                      Demo programs (one per API tier, for both Mobius and Mertens)
 PERFORMANCE.md             Runtime, memory layout, and range constraint analysis

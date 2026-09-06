@@ -15,19 +15,11 @@ endif
 # Override with: make BUCKET_SIEVE=0
 BUCKET_SIEVE ?= 1
 
-# --- Full/P2 bucket entry layout: 1 = narrow/prime-only/divide-per-hit
-# (DEFAULT, 4 B),
+# --- Bucket entry layout: 1 = narrow/prime-only/divide-per-hit (DEFAULT, 4 B),
 # 0 = wide/packed/divide-free (8 B). Narrow wins at scale on many-core ARM;
 # wide may win where the per-hit divide is costlier. See
 # ../sieve/PERFORMANCE.md section 6. Override with: make SIEVE_BUCKET_NARROW_ENTRY=0
 SIEVE_BUCKET_NARROW_ENTRY ?= 1
-
-# --- Coprime-6 bucket geometry (P=6 Loop 2 only) ---
-# Independent of the full/P2 setting above.
-# The native P=6 scheduler is faster with divide-free wide entries on ARM,
-# without changing the full or odd sieve entry format.
-COPRIME6_NARROW_ENTRY ?= 0
-COPRIME6_DIRECT_CUTOFF_MULT ?= 2200
 
 # --- Fused finalize + Mertens prefix (default: on) ---
 # When 1, Loop 2's in-place sieve skips the in-sieve mu finalization and folds
@@ -69,7 +61,6 @@ CXXFLAGS := -O3 -std=c++17 \
             -DUSE_BUCKET_SIEVE=$(BUCKET_SIEVE) \
             -DSIEVE_NARROW_ENTRY=$(SIEVE_BUCKET_NARROW_ENTRY) \
             -DSIEVE_FUSED_FINALIZE=$(FUSED_FINALIZE) \
-            -DSIEVE_COPRIME6_FUSED_FINALIZE=$(FUSED_FINALIZE) \
             -DMERTENSHURST_FULL_RECOVERY=$(FULL_RECOVERY) \
             -DMERTENSHURST_S1_OUTER_Q6=$(S1_OUTER_Q6) \
             -DMERTENSHURST_S2_OUTER_Q6=$(S2_OUTER_Q6) \
@@ -287,23 +278,6 @@ Q210_LOOP2_P2_SANITIZE_CXXFLAGS = $(filter-out -O3 -flto -DNDEBUG,$(Q210_LOOP2_P
 Q210_LOOP2_P2_FALLBACK_CXXFLAGS = $(Q210_LOOP2_P2_VALIDATE_CXXFLAGS) \
                                   -DMERTENSHURST_S1_Q30030_LADDER_VALIDATE=1 \
                                   -DMERTENSHURST_S1_Q30030_FORCE_Q210_FALLBACK=1
-Q210_LOOP2_P6_CXXFLAGS = $(Q210_CONTRACT_CXXFLAGS) \
-                         -DMERTENSHURST_LOOP2_SIEVE_P=6 \
-                         -DMERTENSHURST_LOOP2_SIEVE_VALIDATE=0 \
-                         -DCOPRIME6_SIEVE_NARROW_ENTRY=$(COPRIME6_NARROW_ENTRY) \
-                         -DCOPRIME6_SIEVE_DIRECT_CUTOFF_MULT=$(COPRIME6_DIRECT_CUTOFF_MULT)
-Q210_LOOP2_P6_VALIDATE_CXXFLAGS = $(Q210_CONTRACT_CXXFLAGS) \
-                                  -DMERTENSHURST_LOOP2_SIEVE_P=6 \
-                                  -DMERTENSHURST_LOOP2_SIEVE_VALIDATE=1 \
-                                  -DCOPRIME6_SIEVE_NARROW_ENTRY=$(COPRIME6_NARROW_ENTRY) \
-                                  -DCOPRIME6_SIEVE_DIRECT_CUTOFF_MULT=$(COPRIME6_DIRECT_CUTOFF_MULT) \
-                                  -UNDEBUG
-Q210_LOOP2_P6_SANITIZE_CXXFLAGS = $(filter-out -O3 -flto -DNDEBUG,$(Q210_LOOP2_P6_VALIDATE_CXXFLAGS)) \
-                                  -O1 -g -fsanitize=address,undefined \
-                                  -fno-omit-frame-pointer
-Q210_LOOP2_P6_FALLBACK_CXXFLAGS = $(Q210_LOOP2_P6_VALIDATE_CXXFLAGS) \
-                                  -DMERTENSHURST_S1_Q30030_LADDER_VALIDATE=1 \
-                                  -DMERTENSHURST_S1_Q30030_FORCE_Q210_FALLBACK=1
 Q210_RECORD_CXXFLAGS = $(Q210_CXXFLAGS) \
                        -USIEVE_STRIDE_LOG -DSIEVE_STRIDE_LOG=7
 
@@ -346,15 +320,12 @@ SIEVEDIR = ../sieve
 SRCS     = $(SRCDIR)/MertensHurst.cpp $(SIEVEDIR)/SegmentedMobiusSieve.cpp $(SRCDIR)/main.cpp
 P1_SRCS  = $(SRCS)
 P2_SRCS  = $(SRCS) $(SIEVEDIR)/SegmentedOddMobiusSieve.cpp
-P6_SRCS  = $(SRCS) $(SIEVEDIR)/SegmentedCoprime6MobiusSieve.cpp
 
 .PHONY: all q2 s2-unordered q6-zero-complete q6-zero-complete-validate \
         optimized optimized-validate q30-coupled q30-coupled-validate \
         q210-coupled q210-coupled-loop2 q210-coupled-loop2-p1 \
         q210-coupled-loop2-p2 q210-coupled-loop2-p2-validate \
         q210-coupled-loop2-p2-sanitize q210-coupled-loop2-p2-fallback \
-        q210-coupled-loop2-p6 q210-coupled-loop2-p6-validate \
-        q210-coupled-loop2-p6-sanitize q210-coupled-loop2-p6-fallback \
         q210-coupled-record \
         q210-coupled-validate q210-coupled-sanitize \
         q210-coupled-native q210-coupled-fallback q210-coupled-odd-loop2 \
@@ -392,14 +363,6 @@ q210-coupled-loop2-p2-validate: $(BUILDDIR)/mertens_q210_coupled_loop2_p2_valida
 q210-coupled-loop2-p2-sanitize: $(BUILDDIR)/mertens_q210_coupled_loop2_p2_sanitize
 
 q210-coupled-loop2-p2-fallback: $(BUILDDIR)/mertens_q210_coupled_loop2_p2_fallback
-
-q210-coupled-loop2-p6: $(BUILDDIR)/mertens_q210_coupled_loop2_p6
-
-q210-coupled-loop2-p6-validate: $(BUILDDIR)/mertens_q210_coupled_loop2_p6_validate
-
-q210-coupled-loop2-p6-sanitize: $(BUILDDIR)/mertens_q210_coupled_loop2_p6_sanitize
-
-q210-coupled-loop2-p6-fallback: $(BUILDDIR)/mertens_q210_coupled_loop2_p6_fallback
 
 q210-coupled-odd-loop2: $(BUILDDIR)/mertens_q210_coupled_odd_loop2
 
@@ -478,22 +441,6 @@ $(BUILDDIR)/mertens_q210_coupled_loop2_p2_sanitize: Makefile $(P2_SRCS) $(wildca
 $(BUILDDIR)/mertens_q210_coupled_loop2_p2_fallback: Makefile $(P2_SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
 	@mkdir -p $(BUILDDIR)
 	$(CXX) $(Q210_LOOP2_P2_FALLBACK_CXXFLAGS) $(P2_SRCS) -o $@ $(LDFLAGS)
-
-$(BUILDDIR)/mertens_q210_coupled_loop2_p6: Makefile $(P6_SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
-	@mkdir -p $(BUILDDIR)
-	$(CXX) $(Q210_LOOP2_P6_CXXFLAGS) $(P6_SRCS) -o $@ $(LDFLAGS)
-
-$(BUILDDIR)/mertens_q210_coupled_loop2_p6_validate: Makefile $(P6_SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
-	@mkdir -p $(BUILDDIR)
-	$(CXX) $(Q210_LOOP2_P6_VALIDATE_CXXFLAGS) $(P6_SRCS) -o $@ $(LDFLAGS)
-
-$(BUILDDIR)/mertens_q210_coupled_loop2_p6_sanitize: Makefile $(P6_SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
-	@mkdir -p $(BUILDDIR)
-	$(CXX) $(Q210_LOOP2_P6_SANITIZE_CXXFLAGS) $(P6_SRCS) -o $@ $(LDFLAGS) -fsanitize=address,undefined
-
-$(BUILDDIR)/mertens_q210_coupled_loop2_p6_fallback: Makefile $(P6_SRCS) $(wildcard $(SRCDIR)/*.h) $(wildcard $(SIEVEDIR)/*.h)
-	@mkdir -p $(BUILDDIR)
-	$(CXX) $(Q210_LOOP2_P6_FALLBACK_CXXFLAGS) $(P6_SRCS) -o $@ $(LDFLAGS)
 
 $(BUILDDIR)/mertens_q210_coupled_odd_loop2: $(BUILDDIR)/mertens_q210_coupled_loop2_p2
 	@cp $< $@

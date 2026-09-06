@@ -47,8 +47,6 @@
 #include "SegmentedMertensSieve.h"
 #if MERTENSHURST_LOOP2_SIEVE_P == 2
 #include "SegmentedOddMertensSieve.h"
-#elif MERTENSHURST_LOOP2_SIEVE_P == 6
-#include "SegmentedCoprime6MertensSieve.h"
 #endif
 
 // Mirrors the default in SegmentedMobiusSieve.cpp; override with -DUSE_BUCKET_SIEVE=0.
@@ -205,19 +203,18 @@ static_assert(!UseQ210Coupled
 #endif
 
 static constexpr UInt32 Loop2SieveP = MERTENSHURST_LOOP2_SIEVE_P;
-static_assert(Loop2SieveP == 1 || Loop2SieveP == 2 || Loop2SieveP == 6,
-              "MERTENSHURST_LOOP2_SIEVE_P must be 1, 2, or 6");
+static_assert(Loop2SieveP == 1 || Loop2SieveP == 2,
+              "MERTENSHURST_LOOP2_SIEVE_P must be 1 or 2");
 static constexpr bool UseRestrictedLoop2 = Loop2SieveP != 1;
 static constexpr bool UseOddLoop2 = Loop2SieveP == 2;
-static constexpr bool UseCoprime6Loop2 = Loop2SieveP == 6;
 static constexpr double DefaultUFactorFloor = 0.30;
 static constexpr double DefaultUFactorSlope = 0.025;
 static constexpr double DefaultUFactorMaximum =
-    Loop2SieveP == 2 ? 0.70 : Loop2SieveP == 6 ? 0.75 : 0.55;
+    Loop2SieveP == 2 ? 0.70 : 0.55;
 static constexpr double DefaultUFactorAnchorDecade =
     Loop2SieveP == 1 ? 16.0 : 18.0;
 static constexpr double DefaultNuRatio =
-    Loop2SieveP == 2 ? 0.95 : Loop2SieveP == 6 ? 1.00 : 0.90;
+    Loop2SieveP == 2 ? 0.95 : 0.90;
 static_assert(!UseRestrictedLoop2 || MERTENSHURST_Q210_COUPLED,
               "restricted Loop 2 requires the native Q210 contract");
 static constexpr bool ValidateLoop2Sieve =
@@ -226,7 +223,7 @@ static_assert(MERTENSHURST_LOOP2_SIEVE_VALIDATE == 0
               || MERTENSHURST_LOOP2_SIEVE_VALIDATE == 1,
               "MERTENSHURST_LOOP2_SIEVE_VALIDATE must be 0 or 1");
 static_assert(!ValidateLoop2Sieve || UseRestrictedLoop2,
-              "Loop 2 sieve validation requires P=2 or P=6");
+              "Loop 2 sieve validation requires P=2");
 
 #ifndef MERTENSHURST_VALIDATE_UNORDERED_S2
 #define MERTENSHURST_VALIDATE_UNORDERED_S2 0
@@ -475,10 +472,6 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     double oddSetupTime = 0.0;
     double oddSieveTime = 0.0;
     double oddS1Time = 0.0;
-#elif MERTENSHURST_LOOP2_SIEVE_P == 6 && MERTENSHURST_Q210_COUPLED
-    double coprime6SetupTime = 0.0;
-    double coprime6SieveTime = 0.0;
-    double coprime6S1Time = 0.0;
 #endif
 
     constexpr UInt64 BF = SegmentedMobiusSieveCore::STENCIL_PERIOD;
@@ -512,9 +505,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             uMax = std::min(uMax, quotientCacheMax);
         }
 #if USE_BUCKET_SIEVE
-        // Loops 0/1 and every restricted binary's runtime fallback use the
-        // full sieve. The P6-specific reach is checked later, only after the
-        // Q210 guard has selected that native Loop 2 backend.
+        // Bucket scheduler reach: sqrt(u) <= (LP_SIZE - 1) * M2.
         constexpr UInt64 reach = SegmentedMobiusSieveCore::schedulerReach();
         uMax = std::min(uMax, reach * reach);
 #endif
@@ -745,25 +736,6 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         if (useQ210Coupled) {
             useQ210Coupled = false;
             q210ForcedFallback = true;
-        }
-#endif
-#if MERTENSHURST_LOOP2_SIEVE_P == 6 && USE_BUCKET_SIEVE
-        if (useQ210Coupled) {
-            constexpr UInt64 reach =
-                SegmentedCoprime6MobiusSieveCore::schedulerReach();
-            constexpr UInt128 uMaxWide = UInt128(reach) * UInt128(reach);
-            if constexpr (uMaxWide
-                          <= UInt128(std::numeric_limits<UInt64>::max())) {
-                constexpr UInt64 uMax = static_cast<UInt64>(uMaxWide);
-                if (u > uMax) {
-                    std::cerr << "Error: sieve bound u = " << u
-                              << " exceeds the native P6 Loop 2 hard cap "
-                              << uMax
-                              << " for this build (see INPUT_BOUNDS.md)."
-                              << std::endl;
-                    std::abort();
-                }
-            }
         }
 #endif
         if (useQ30Coupled) {
@@ -1319,9 +1291,8 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     // the O(log T) ordinary-Mertens checkpoints needed by
     // M_2(z) = sum_j M(floor(z / 2^j)) while those segments are live.
     const UInt64 loop01End = B * (nuMax / B + (nuMax % B != 0));
-    const UInt64 loop2Seam = loop01End + 1;
 #if MERTENSHURST_LOOP2_SIEVE_P == 2
-    const UInt64 oddLoop2Seam = loop2Seam;
+    const UInt64 oddLoop2Seam = loop01End + 1;
 #endif
     std::array<UInt64, 64> oddSeedPositions{};
     std::array<Int64, 64> oddSeedValues{};
@@ -3586,346 +3557,6 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         }
 #endif
     } else
-#elif MERTENSHURST_LOOP2_SIEVE_P == 6 && MERTENSHURST_Q210_COUPLED
-    const bool useCoprime6Loop2 = UseCoprime6Loop2 && useQ210Coupled;
-    if (useCoprime6Loop2) {
-        if (!useQ6CompactHotState
-            || B > std::numeric_limits<UInt64>::max() / 3) {
-            std::cerr << "Internal error: invalid coprime-6 Loop 2 contract."
-                      << std::endl;
-            std::abort();
-        }
-
-#if MERTENSHURST_LOOP2_SIEVE_VALIDATE
-        // Run the retained full-M Loop 2 from its exact ownership seam into
-        // copies of the same persistent rows. The native M6 path below starts
-        // at one, but its denominator domain is clipped to this same seam.
-        std::vector<Int64> expectedLoop2Values = q6CompactValues;
-        std::vector<Int128> expectedLoop2Values128 = q6CompactValues128;
-        {
-            SegmentedMertensSieveCore referenceSieve(B);
-            std::vector<Int32> referenceM(coarseLength(B));
-            Int32 referencePrev = MPrev;
-            UInt64 referenceLo = loop2Seam;
-            while (referenceLo <= u) {
-                const UInt64 referenceHi = std::min(
-                    referenceLo + B - 1, u
-                );
-                referenceSieve.sieveInPlace(
-                    referenceLo, referenceHi, referencePrev,
-                    referenceM.data(), primes
-                );
-                const Int8* referenceResidual =
-                    referenceSieve.mobiusSieve().data();
-                referencePrev = GET_M(
-                    referenceM.data(), referenceResidual,
-                    referenceLo, referenceHi
-                );
-                applyS1Segment(
-                    referenceM.data(), referenceResidual,
-                    referenceLo, referenceHi, true
-                );
-                referenceLo = referenceHi + 1;
-            }
-        }
-        q6CompactValues.swap(expectedLoop2Values);
-        q6CompactValues128.swap(expectedLoop2Values128);
-#endif
-
-        // Clip denominator ownership once from the original, unscaled row.
-        // All four M6 streams below must use this identical cached interval;
-        // deriving a new bound from a scaled numerator would move work across
-        // the Loop 0/1 seam.
-        #pragma omp parallel for schedule(static)
-        for (UInt64 workIndex = 0;
-             workIndex < s1Q6Worklist.size();
-             ++workIndex) {
-            if (workIndex < q6WideCount) {
-                const UInt128 seamUpper =
-                    q6PartialArgs128[workIndex] / UInt128(loop2Seam);
-                if (seamUpper < UInt128(q6CommonKappa[workIndex]))
-                    q6CommonKappa[workIndex] =
-                        static_cast<UInt64>(seamUpper);
-            } else {
-                q6CommonKappa[workIndex] = std::min(
-                    q6CommonKappa[workIndex],
-                    q6PartialArgs[workIndex] / loop2Seam
-                );
-            }
-        }
-
-        // The P6 stream owns its prefix from one with carry M6(0)=0. Drop the
-        // completed full-width Loop 0/1 sieve before allocating B packed
-        // coprime-to-6 bytes.
-        mSieve.releasePrefixWorkspace<Int32>();
-        mSieve.mobiusSieve().releaseMemory();
-        releaseVector(M32);
-
-        const UInt64 coprime6SegmentSpan = 3 * B;
-        const UInt64 packedCapacity =
-            SegmentedCoprime6MobiusSieveCore::maxCountForSpan(
-                coprime6SegmentSpan
-            );
-        if (packedCapacity != B) {
-            std::cerr << "Internal error: coprime-6 Loop 2 does not match "
-                         "its stored-entry budget."
-                      << std::endl;
-            std::abort();
-        }
-
-        if (profile) getDayTime(start);
-        SegmentedCoprime6MertensSieveCore coprime6Sieve(
-            coprime6SegmentSpan
-        );
-        M32.resize(
-            (packedCapacity + SegmentedCoprime6MertensSieveCore::STRIDE - 1)
-            >> SegmentedCoprime6MertensSieveCore::STRIDE_LOG
-        );
-#if MERTENSHURST_LOOP2_SIEVE_VALIDATE
-        SegmentedCoprime6MertensSieveCoreT<
-            Coprime6MertensStorage::Direct
-        > referenceCoprime6Sieve(coprime6SegmentSpan);
-        std::vector<Int32> referenceCoprime6M(packedCapacity);
-        Int32 referenceCoprime6Prev = 0;
-#endif
-        if (profile) {
-            getDayTime(end);
-            coprime6SetupTime += getDuration(start, end);
-        }
-
-        Int32* coprime6MP = M32.data();
-        Int32 coprime6MertensPrev = 0;
-        UInt64 coprime6L1 = 1;
-        while (coprime6L1 <= u) {
-            const UInt64 coprime6SegmentLength = std::min(
-                coprime6SegmentSpan, u - coprime6L1 + 1
-            );
-            const UInt64 coprime6L2 =
-                coprime6L1 + coprime6SegmentLength - 1;
-            const Int32 segmentCoprime6Prev = coprime6MertensPrev;
-
-            if (profile) getDayTime(start);
-            coprime6Sieve.sieveInPlace(
-                coprime6L1, coprime6L2, segmentCoprime6Prev,
-                coprime6MP, primes
-            );
-            const Int8* coprime6Residual =
-                coprime6Sieve.mobiusSieve().data();
-            const UInt64 firstPacked =
-                coprime6Sieve.mobiusSieve().firstPackedIndex();
-#ifndef NDEBUG
-            assert(coprime6Sieve.mobiusSieve().firstCoprime6()
-                   == coprime6L1);
-#endif
-            coprime6MertensPrev = coprime6Sieve.getCoprime6Mertens(
-                coprime6MP, coprime6L2
-            );
-#if MERTENSHURST_LOOP2_SIEVE_VALIDATE
-            assert(referenceCoprime6Prev == segmentCoprime6Prev);
-            referenceCoprime6Sieve.sieveInPlace(
-                coprime6L1, coprime6L2, referenceCoprime6Prev,
-                referenceCoprime6M.data(), primes
-            );
-            assert(referenceCoprime6Sieve.firstPackedIndex() == firstPacked);
-            assert(referenceCoprime6Sieve.packedCount()
-                   == coprime6Sieve.packedCount());
-            referenceCoprime6Prev =
-                referenceCoprime6Sieve.getCoprime6Mertens(
-                    referenceCoprime6M.data(), coprime6L2
-                );
-            assert(referenceCoprime6Prev == coprime6MertensPrev);
-            #pragma omp parallel for schedule(static)
-            for (UInt64 packed = 0;
-                 packed < coprime6Sieve.packedCount();
-                 ++packed) {
-                const UInt64 original =
-                    coprime6Sieve.mobiusSieve().originalAtLocal(packed);
-                const Int32 compressed = GET_COPRIME6_MERTENS_IN_RANGE(
-                    coprime6MP, coprime6Residual, firstPacked, original
-                );
-                assert(compressed == referenceCoprime6M[packed]);
-            }
-#endif
-            if (profile) {
-                getDayTime(end);
-                const double elapsed = getDuration(start, end);
-                t[6] += elapsed;
-                coprime6SieveTime += elapsed;
-            }
-
-            if (profile) getDayTime(start);
-            auto getCoprime6Mertens = [=](UInt64 quotient) {
-                return GET_COPRIME6_MERTENS_IN_RANGE(
-                    coprime6MP, coprime6Residual, firstPacked, quotient
-                );
-            };
-#if MERTENSHURST_LOOP2_SIEVE_VALIDATE
-            const UInt64 referenceFirstPacked =
-                referenceCoprime6Sieve.firstPackedIndex();
-            auto getReferenceCoprime6Mertens =
-                [=, &referenceCoprime6M](UInt64 quotient) {
-                    const UInt64 through =
-                        SegmentedCoprime6MobiusSieveCore::countThrough(
-                            quotient
-                        );
-                    return referenceCoprime6M[
-                        through - referenceFirstPacked - 1
-                    ];
-                };
-#endif
-            auto evaluateStreams = [&](auto y, UInt64 lowerExclusive,
-                                       UInt64 upperInclusive,
-                                       const auto& getMertens) {
-                using TArg = decltype(y);
-                using Acc = S1Q6Detail::Accumulator<TArg>;
-                std::array<Acc, 4> values{};
-                values[0] =
-                    evaluateS1OuterQ210ZeroCompleteWithLookup(
-                        y, lowerExclusive, upperInclusive,
-                        coprime6L1, coprime6L2, getMertens,
-                        qCache, dCAP, true
-                    );
-                values[1] =
-                    evaluateS1OuterQ210ZeroCompleteWithLookup(
-                        y / 2, lowerExclusive, upperInclusive,
-                        coprime6L1, coprime6L2, getMertens,
-                        qCache, dCAP, true
-                    );
-                values[2] =
-                    evaluateS1OuterQ210ZeroCompleteWithLookup(
-                        y / 3, lowerExclusive, upperInclusive,
-                        coprime6L1, coprime6L2, getMertens,
-                        qCache, dCAP, true
-                    );
-                values[3] =
-                    evaluateS1OuterQ210ZeroCompleteWithLookup(
-                        y / 6, lowerExclusive, upperInclusive,
-                        coprime6L1, coprime6L2, getMertens,
-                        qCache, dCAP, true
-                    );
-                return values;
-            };
-
-            #pragma omp parallel for schedule(dynamic, 1)
-            for (UInt64 workIndex = 0;
-                 workIndex < s1Q6Worklist.size();
-                ++workIndex) {
-                if (workIndex < q6WideCount) {
-                    const UInt128 y = q6PartialArgs128[workIndex];
-                    const Int128 fused =
-                        evaluateS1OuterQ210Coprime6FusedWithLookup(
-                            y, q6PartialArgsDivU[workIndex],
-                            q6CommonKappa[workIndex],
-                            coprime6L1, coprime6L2,
-                            getCoprime6Mertens, qCache, dCAP
-                        );
-#if MERTENSHURST_LOOP2_SIEVE_VALIDATE
-                    const auto values = evaluateStreams(
-                        y, q6PartialArgsDivU[workIndex],
-                        q6CommonKappa[workIndex],
-                        getCoprime6Mertens
-                    );
-                    const auto referenceValues = evaluateStreams(
-                        y, q6PartialArgsDivU[workIndex],
-                        q6CommonKappa[workIndex],
-                        getReferenceCoprime6Mertens
-                    );
-                    for (UInt32 stream = 0; stream < 4; ++stream)
-                        assert(values[stream] == referenceValues[stream]);
-                    const Int128 transparent =
-                        -Int128(values[0]) + Int128(values[1])
-                        + Int128(values[2]) - Int128(values[3]);
-                    assert(fused == transparent);
-#endif
-                    q6CompactValues128[workIndex] += fused;
-                } else {
-                    const UInt64 y = q6PartialArgs[workIndex];
-                    const auto values = evaluateStreams(
-                        y, q6PartialArgsDivU[workIndex],
-                        q6CommonKappa[workIndex],
-                        getCoprime6Mertens
-                    );
-#if MERTENSHURST_LOOP2_SIEVE_VALIDATE
-                    const Int128 fused =
-                        evaluateS1OuterQ210Coprime6FusedWithLookup(
-                            y, q6PartialArgsDivU[workIndex],
-                            q6CommonKappa[workIndex],
-                            coprime6L1, coprime6L2,
-                            getCoprime6Mertens, qCache, dCAP
-                        );
-                    const auto referenceValues = evaluateStreams(
-                        y, q6PartialArgsDivU[workIndex],
-                        q6CommonKappa[workIndex],
-                        getReferenceCoprime6Mertens
-                    );
-                    for (UInt32 stream = 0; stream < 4; ++stream)
-                        assert(values[stream] == referenceValues[stream]);
-                    const Int128 transparent =
-                        -Int128(values[0]) + Int128(values[1])
-                        + Int128(values[2]) - Int128(values[3]);
-                    assert(fused == transparent);
-#endif
-                    const UInt64 narrowIndex = workIndex - q6WideCount;
-                    const Int128 updated =
-                        Int128(q6CompactValues[narrowIndex])
-                        - Int128(values[0]) + Int128(values[1])
-                        + Int128(values[2]) - Int128(values[3]);
-                    if (updated < Int128(std::numeric_limits<Int64>::min())
-                        || updated > Int128(
-                            std::numeric_limits<Int64>::max()
-                        )) {
-                        std::cerr << "Internal error: coprime-6 Loop 2 "
-                                     "narrow-row overflow."
-                                  << std::endl;
-                        std::abort();
-                    }
-                    q6CompactValues[narrowIndex] =
-                        static_cast<Int64>(updated);
-                }
-            }
-            if (profile) {
-                getDayTime(end);
-                const double elapsed = getDuration(start, end);
-                t[7] += elapsed;
-                coprime6S1Time += elapsed;
-            }
-
-            coprime6L1 = coprime6L2 + 1;
-        }
-
-#if MERTENSHURST_LOOP2_SIEVE_VALIDATE
-        if (q6CompactValues.size() != expectedLoop2Values.size()
-            || q6CompactValues128.size()
-                != expectedLoop2Values128.size()) {
-            std::cerr << "Internal error: coprime-6 Loop 2 row-count "
-                         "mismatch."
-                      << std::endl;
-            std::abort();
-        }
-        for (UInt64 workIndex = 0;
-             workIndex < q6CompactValues128.size();
-             ++workIndex) {
-            if (q6CompactValues128[workIndex]
-                != expectedLoop2Values128[workIndex]) {
-                std::cerr << "Internal error: coprime-6 Loop 2 wide-row "
-                             "mismatch at "
-                          << workIndex << "." << std::endl;
-                std::abort();
-            }
-        }
-        for (UInt64 narrowIndex = 0;
-             narrowIndex < q6CompactValues.size();
-             ++narrowIndex) {
-            if (q6CompactValues[narrowIndex]
-                != expectedLoop2Values[narrowIndex]) {
-                std::cerr << "Internal error: coprime-6 Loop 2 narrow-row "
-                             "mismatch at "
-                          << narrowIndex + q6WideCount << "." << std::endl;
-                std::abort();
-            }
-        }
-#endif
-    } else
 #endif
     {
         M32.resize(coarseLength(B));
@@ -4122,25 +3753,6 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             std::cout << "  packed stride: "
                       << SegmentedOddMertensSieveCore::STRIDE << std::endl;
         }
-#elif MERTENSHURST_LOOP2_SIEVE_P == 6 && MERTENSHURST_Q210_COUPLED
-        std::cout << "Active Loop 2 sieve P: "
-                  << (useCoprime6Loop2 ? 6 : 1) << std::endl;
-        std::cout << "Coprime-to-6 Loop 2: "
-                  << (useCoprime6Loop2 ? "active" : "full-M fallback")
-                  << std::endl;
-        if (useCoprime6Loop2) {
-            std::cout << "  final Loop 0/1 quotient T: " << loop01End
-                      << std::endl;
-            std::cout << "  first Loop 2 quotient: " << loop2Seam
-                      << std::endl;
-            std::cout << "  M6 stream start: 1" << std::endl;
-            std::cout << "  packed stride: "
-                      << SegmentedCoprime6MertensSieveCore::STRIDE
-                      << std::endl;
-            std::cout << "  wide S1 fusion: active" << std::endl;
-            std::cout << "  Q210 stepper lanes: "
-                      << S1Q210Detail::StepperLanes << std::endl;
-        }
 #else
         std::cout << "Active Loop 2 sieve P: 1" << std::endl;
 #endif
@@ -4172,15 +3784,6 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 std::cout << "  Signed odd S1: " << oddS1Time
                           << std::endl;
                 std::cout << "      Odd setup: " << oddSetupTime
-                          << " (outside phase total)" << std::endl;
-            }
-#elif MERTENSHURST_LOOP2_SIEVE_P == 6 && MERTENSHURST_Q210_COUPLED
-            if (useCoprime6Loop2) {
-                std::cout << "       M6 sieve: " << coprime6SieveTime
-                          << std::endl;
-                std::cout << "   Selective S1: " << coprime6S1Time
-                          << std::endl;
-                std::cout << "       M6 setup: " << coprime6SetupTime
                           << " (outside phase total)" << std::endl;
             }
 #endif

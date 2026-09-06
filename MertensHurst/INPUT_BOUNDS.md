@@ -12,9 +12,7 @@ $$
 
 and `nuRatio == 0.9`. P2 instead uses
 $f(n)=\operatorname{clamp}(0.70-0.025(\log_{10}n-18),0.30,0.70)$
-with `nuRatio == 0.95`; P6 uses
-$f(n)=\operatorname{clamp}(0.75-0.025(\log_{10}n-18),0.30,0.75)$
-with `nuRatio == 1.0`. The resulting $n$ thresholds are approximate and their last digits may depend on the platform's floating-point library.
+with `nuRatio == 0.95`. The resulting $n$ thresholds are approximate and their last digits may depend on the platform's floating-point library.
 
 The imposed absolute bounds are $10^8 \le n \le 10^{26}$. Correctness has been verified by completed computations through $10^{25}$; $10^{26}$ is accepted after the runtime and structural checks below but remains unverified until that computation is completed independently.
 
@@ -22,7 +20,6 @@ The imposed absolute bounds are $10^8 \le n \le 10^{26}$. Correctness has been v
 
 | Approximate $n$ | Event | Kind |
 |---:|---|---|
-| $1.921\times10^8$ | P6 default split first clears one stencil period | Parameter-dependent lower bound |
 | $2.129\times10^8$ | P2 default split first clears one stencil period | Parameter-dependent lower bound |
 | $2.372\times10^8$ | P1 default split first clears one stencil period | Parameter-dependent lower bound |
 | $2^{64}\approx1.845\times10^{19}$ | Legacy all-Q2 S1 bound narrowing ceases to be generally safe | Profile-specific hard bound |
@@ -51,7 +48,7 @@ The table is a guide, not a substitute for the detailed conditions below. In par
 
 The minimum viable sieve segment size is `B == BF == STENCIL_PERIOD == 13860`, and the main sieve loop requires `B < nu_max`. The implementation reduces its initial segment to the largest stencil multiple below `nu_max` and rejects the configuration if `nu_max <= BF`; it no longer continues with an empty main loop.
 
-P1 evaluates `floor(0.9*floor(sqrt(n)))` by default, so this requires approximately $n \ge 2.372 \times 10^8$. The corresponding default thresholds are approximately $2.129\times10^8$ for P2 at `nuRatio == 0.95` and $1.921\times10^8$ for P6 at `nuRatio == 1.0`. Inputs between the absolute $10^8$ floor and the active mode's threshold require a larger explicit `nuRatio`.
+P1 evaluates `floor(0.9*floor(sqrt(n)))` by default, so this requires approximately $n \ge 2.372 \times 10^8$. The corresponding P2 default threshold is approximately $2.129\times10^8$ at `nuRatio == 0.95`. Inputs between the absolute $10^8$ floor and the active mode's threshold require a larger explicit `nuRatio`.
 
 More generally, if the split is changed to `nu_max = c*sqrt(n)`, then this structural threshold becomes roughly $(13860/c)^2$. Decreasing the split constant therefore raises the parameter-dependent lower input bound.
 
@@ -148,7 +145,7 @@ At $n=10^{26}$, $\sqrt u\approx158.9$ million, so all scheduled primes remain be
 
 ## 5. Bucket-scheduler reach
 
-**Source:** `../sieve/SegmentedMobiusSieve.h`, `../sieve/SegmentedMobiusSieve.cpp`, `../sieve/SegmentedCoprime6MobiusSieve.h`, `src/MertensHurst.cpp`
+**Source:** `../sieve/SegmentedMobiusSieve.h`, `../sieve/SegmentedMobiusSieve.cpp`, `src/MertensHurst.cpp`
 
 The large-prime scheduler uses a circular buffer of `LP_SIZE` buckets. Its exact largest schedulable prime is
 
@@ -166,25 +163,9 @@ so it requires $\sqrt u$ not to exceed that reach.
 
 The 512-bucket configuration is used for record runs and is described in Section 7 of the paper. Build with `make EXTRA_CXXFLAGS=-DSIEVE_LP_SIZE=1024` for the second row. The runtime derives its cap from `SegmentedMobiusSieveCore::schedulerReach()` for every source of $u$: the default formula, `--u`, or `--u-factor`.
 
-The native P6 Loop-2 scheduler has a different alternating packed-hit
-geometry. With `LP_SIZE=512`, its proven prime reach is 339,958,079 and its
-maximum $u$ is 115,571,495,477,370,241. A P6 binary checks this stricter bound
-only after the runtime Q210 guard selects the P6 backend. If that guard falls
-back, Loop 2 remains in the ordinary full-M scheduler domain above.
+Exactly 1024 buckets fit the wide entry's 10-bit stride field. The current unconditional `static_assert` applies to the common scheduler layout, so going beyond 1024 requires widening or repacking that field, or separating the narrow prime-only representation from the wide layout. For sufficiently large future values, the runtime calculation of `reach * reach` must also be performed and clamped in `UInt128` rather than `UInt64`.
 
-For the ordinary and odd schedulers, exactly 1024 buckets fit the wide entry's
-10-bit stride field. Their current unconditional `static_assert` applies to
-that shared layout, so going beyond 1024 requires widening or repacking the
-field, or separating the narrow prime-only representation from the wide
-layout. P6 uses its own prime/phase entry layout and independently proven
-reach. For sufficiently large future values, every runtime calculation of
-`reach * reach` must also be performed and clamped in `UInt128` rather than
-`UInt64`.
-
-Increasing the ordinary/odd scheduler's $M_2$ is another possible way to
-increase reach, but it is constrained by the 21-bit offset field, the required
-ordering of the sieve thresholds, and cache/performance effects; it is not a
-drop-in capacity change.
+Increasing $M_2$ is another possible way to increase reach, but it is constrained by the 21-bit offset field, the required ordering of the sieve thresholds, and cache/performance effects; it is not a drop-in capacity change.
 
 Building with `make BUCKET_SIEVE=0` sends all large primes through direct iteration and removes **this scheduler constraint only**. Every whole-algorithm limit in the remaining sections still applies.
 
