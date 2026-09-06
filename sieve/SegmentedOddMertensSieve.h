@@ -575,6 +575,12 @@ using SegmentedOddMertensSieveCore =
     _odd_result; \
 })
 
+// Faster hot lookup when the caller guarantees pos >= FIRST_ODD.
+#define GET_ODD_MERTENS_IN_RANGE(M, R, FIRST_ODD, pos) __extension__({ \
+    auto _odd_off = ((pos) - (FIRST_ODD)) >> 1; \
+    (M)[_odd_off >> OddMertensSieveDetail::STRIDE_LOG] + (R)[_odd_off]; \
+})
+
 template <OddMertensStorage Storage = OddMertensStorage::Compressed>
 class SegmentedOddMertensSieveT {
 public:

@@ -123,14 +123,12 @@ static inline bool firstResidueAtLeast(
     return true;
 }
 
-template<typename TArg, typename MIntT>
+template<typename TArg, typename MertensLookup>
 static inline S1Q6Detail::Accumulator<TArg> sumDirectScalar(
     const TArg& y,
-    UInt64 L1,
     UInt64 start,
     UInt64 end,
-    const MIntT* __restrict M,
-    const Int8* __restrict R,
+    const MertensLookup& getMertens,
     const QuotientCache& qCache,
     UInt64 dCAP
 ) {
@@ -142,7 +140,7 @@ static inline S1Q6Detail::Accumulator<TArg> sumDirectScalar(
         const UInt64 quotient = S1Q6Detail::exactSparseQuotient(
             y, denominator, qCache, dCAP
         );
-        result += static_cast<Acc>(GET_M(M, R, L1, quotient));
+        result += static_cast<Acc>(getMertens(quotient));
     };
     auto addClippedBlock = [&](UInt64 block) {
         for (UInt64 residue : Residues) {
@@ -174,14 +172,12 @@ static inline S1Q6Detail::Accumulator<TArg> sumDirectScalar(
     return result;
 }
 
-template<typename TArg, typename MIntT>
+template<typename TArg, typename MertensLookup>
 static inline S1Q6Detail::Accumulator<TArg> sumDirectStepped(
     const TArg& y,
-    UInt64 L1,
     UInt64 start,
     UInt64 end,
-    const MIntT* __restrict M,
-    const Int8* __restrict R,
+    const MertensLookup& getMertens,
     const QuotientCache& qCache,
     UInt64 dCAP
 ) {
@@ -191,7 +187,7 @@ static inline S1Q6Detail::Accumulator<TArg> sumDirectStepped(
 
     if (!stepperSupportsRange(y, start, end)) {
         return sumDirectScalar(
-            y, L1, start, end, M, R, qCache, dCAP
+            y, start, end, getMertens, qCache, dCAP
         );
     }
 
@@ -201,8 +197,8 @@ static inline S1Q6Detail::Accumulator<TArg> sumDirectStepped(
 
     if (start < fullBlock) {
         result += sumDirectScalar(
-            y, L1, start, std::min(end, fullBlock - 1),
-            M, R, qCache, dCAP
+            y, start, std::min(end, fullBlock - 1),
+            getMertens, qCache, dCAP
         );
     }
 
@@ -214,7 +210,7 @@ static inline S1Q6Detail::Accumulator<TArg> sumDirectStepped(
     };
     auto add = [&](const Stepper::Batch& quotients) {
         for (UInt64 quotient : quotients)
-            result += static_cast<Acc>(GET_M(M, R, L1, quotient));
+            result += static_cast<Acc>(getMertens(quotient));
     };
 
     Stepper stepper;
@@ -240,20 +236,18 @@ static inline S1Q6Detail::Accumulator<TArg> sumDirectStepped(
 
     if (block <= end) {
         result += sumDirectScalar(
-            y, L1, block, end, M, R, qCache, dCAP
+            y, block, end, getMertens, qCache, dCAP
         );
     }
     return result;
 }
 
-template<typename TArg, typename MIntT>
+template<typename TArg, typename MertensLookup>
 static inline S1Q6Detail::Accumulator<TArg> sumDirect(
     const TArg& y,
-    UInt64 L1,
     UInt64 start,
     UInt64 end,
-    const MIntT* __restrict M,
-    const Int8* __restrict R,
+    const MertensLookup& getMertens,
     const QuotientCache& qCache,
     UInt64 dCAP
 ) {
@@ -261,38 +255,36 @@ static inline S1Q6Detail::Accumulator<TArg> sumDirect(
 
     if constexpr (std::is_same_v<TArg, UInt64> && !UseDivisionFree) {
         return sumDirectScalar(
-            y, L1, start, end, M, R, qCache, dCAP
+            y, start, end, getMertens, qCache, dCAP
         );
     } else if constexpr (std::is_same_v<TArg, UInt64>) {
         Acc result = 0;
         const UInt64 cacheEnd = std::min(end, dCAP);
         if (start <= cacheEnd) {
             result += sumDirectScalar(
-                y, L1, start, cacheEnd, M, R, qCache, dCAP
+                y, start, cacheEnd, getMertens, qCache, dCAP
             );
         }
         if (cacheEnd == end) return result;
 
         const UInt64 steppedStart = std::max(start, cacheEnd + 1);
         result += sumDirectStepped(
-            y, L1, steppedStart, end, M, R, qCache, dCAP
+            y, steppedStart, end, getMertens, qCache, dCAP
         );
         return result;
     } else {
         return sumDirectStepped(
-            y, L1, start, end, M, R, qCache, dCAP
+            y, start, end, getMertens, qCache, dCAP
         );
     }
 }
 
-template<typename TArg, typename MIntT>
+template<typename TArg, typename MertensLookup>
 static inline S1Q6Detail::Accumulator<TArg> sumSeparatePredicted(
     const TArg& y,
-    UInt64 L1,
     UInt64 start,
     UInt64 end,
-    const MIntT* __restrict M,
-    const Int8* __restrict R,
+    const MertensLookup& getMertens,
     const QuotientCache& qCache,
     UInt64 dCAP
 ) {
@@ -313,7 +305,7 @@ static inline S1Q6Detail::Accumulator<TArg> sumSeparatePredicted(
         UInt64 qCur = S1Q6Detail::exactSparseQuotient(
             y, denominator, qCache, dCAP
         );
-        result += static_cast<Acc>(GET_M(M, R, L1, qCur));
+        result += static_cast<Acc>(getMertens(qCur));
 
         UInt64 qEst = 0;
         while (end - denominator >= 210) {
@@ -321,20 +313,18 @@ static inline S1Q6Detail::Accumulator<TArg> sumSeparatePredicted(
             update_quotients_fixed_stride<210, false>(
                 y, denominator, qCur, qPrev, qEst
             );
-            result += static_cast<Acc>(GET_M(M, R, L1, qEst));
+            result += static_cast<Acc>(getMertens(qEst));
         }
     }
     return result;
 }
 
-template<typename TArg, typename MIntT>
+template<typename TArg, typename MertensLookup>
 static inline S1Q6Detail::Accumulator<TArg> sumInterleavedPredicted(
     const TArg& y,
-    UInt64 L1,
     UInt64 start,
     UInt64 end,
-    const MIntT* __restrict M,
-    const Int8* __restrict R,
+    const MertensLookup& getMertens,
     const QuotientCache& qCache,
     UInt64 dCAP
 ) {
@@ -373,7 +363,7 @@ static inline S1Q6Detail::Accumulator<TArg> sumInterleavedPredicted(
         } else {
             states[state].started = true;
         }
-        result += static_cast<Acc>(GET_M(M, R, L1, quotient));
+        result += static_cast<Acc>(getMertens(quotient));
     };
     auto addClippedBlock = [&](UInt64 block) {
         for (std::size_t state = 0; state < Residues.size(); ++state) {
@@ -406,26 +396,25 @@ static inline S1Q6Detail::Accumulator<TArg> sumInterleavedPredicted(
     return result;
 }
 
-template<typename TArg, typename MIntT>
+template<typename TArg, typename MertensLookup>
 static inline S1Q6Detail::Accumulator<TArg> sumCoprime210(
     const TArg& y,
-    UInt64 L1,
-    UInt64 L2,
+    UInt64 queryLo,
+    UInt64 queryHi,
     UInt64 start,
     UInt64 end,
-    const MIntT* __restrict M,
-    const Int8* __restrict R,
+    const MertensLookup& getMertens,
     const QuotientCache& qCache,
     UInt64 dCAP,
     bool interleavePredictors
 ) {
     using Acc = S1Q6Detail::Accumulator<TArg>;
-    if (L1 == 0 || L1 > L2 || start > end) return Acc(0);
+    if (queryLo == 0 || queryLo > queryHi || start > end) return Acc(0);
 
-    const TArg loBySegment = L2 == std::numeric_limits<UInt64>::max()
+    const TArg loBySegment = queryHi == std::numeric_limits<UInt64>::max()
         ? TArg(1)
-        : y / TArg(L2 + 1) + TArg(1);
-    const TArg hiBySegment = y / TArg(L1);
+        : y / TArg(queryHi + 1) + TArg(1);
+    const TArg hiBySegment = y / TArg(queryLo);
     if (loBySegment > TArg(end) || hiBySegment < TArg(start)) return Acc(0);
     const UInt64 lo = std::max(start, static_cast<UInt64>(loBySegment));
     const UInt64 hi = hiBySegment >= TArg(end)
@@ -434,36 +423,36 @@ static inline S1Q6Detail::Accumulator<TArg> sumCoprime210(
     if (lo > hi) return Acc(0);
 
     if constexpr (std::is_same_v<TArg, UInt64> && !UseDivisionFree) {
-        return sumDirect(y, L1, lo, hi, M, R, qCache, dCAP);
+        return sumDirect(y, lo, hi, getMertens, qCache, dCAP);
     }
 
     if constexpr (std::is_same_v<TArg, UInt128> && !UseDivisionFree) {
         if (stepperSupportsRange(y, lo, hi))
-            return sumDirect(y, L1, lo, hi, M, R, qCache, dCAP);
+            return sumDirect(y, lo, hi, getMertens, qCache, dCAP);
     }
 
     UInt64 exactThrough = S1Q6Detail::sparsePredictorBoundary<210>(
         y, lo, hi, dCAP
     );
     if (exactThrough == 0)
-        return sumDirect(y, L1, lo, hi, M, R, qCache, dCAP);
+        return sumDirect(y, lo, hi, getMertens, qCache, dCAP);
     if constexpr (std::is_same_v<TArg, UInt64> && UseDivisionFree)
         exactThrough = std::max(exactThrough, dCAP);
     exactThrough = std::min(exactThrough, hi);
 
     Acc result = sumDirect(
-        y, L1, lo, exactThrough, M, R, qCache, dCAP
+        y, lo, exactThrough, getMertens, qCache, dCAP
     );
     if (exactThrough == hi) return result;
 
     const UInt64 predictedLo = exactThrough + 1;
     if (interleavePredictors) {
         result += sumInterleavedPredicted(
-            y, L1, predictedLo, hi, M, R, qCache, dCAP
+            y, predictedLo, hi, getMertens, qCache, dCAP
         );
     } else {
         result += sumSeparatePredicted(
-            y, L1, predictedLo, hi, M, R, qCache, dCAP
+            y, predictedLo, hi, getMertens, qCache, dCAP
         );
     }
     return result;
@@ -492,8 +481,35 @@ evaluateS1OuterQ210ZeroComplete(
 ) {
     using Acc = S1Q6Detail::Accumulator<TArg>;
     if (lowerExclusive == std::numeric_limits<UInt64>::max()) return Acc(0);
+    auto getMertens = [=](UInt64 quotient) {
+        return GET_M(M, R, L1, quotient);
+    };
     return S1Q210Detail::sumCoprime210(
         y, L1, L2, lowerExclusive + 1, commonKappa,
-        M, R, qCache, dCAP, loop2
+        getMertens, qCache, dCAP, loop2
+    );
+}
+
+// Variant for segmented representations whose storage base is independent of
+// the quotient interval being visited.  The lookup object must return the
+// exact Mertens-like value for every quotient in [queryLo, queryHi].
+template<typename TArg, typename MertensLookup>
+static inline S1Q6Detail::Accumulator<TArg>
+evaluateS1OuterQ210ZeroCompleteWithLookup(
+    const TArg& y,
+    UInt64 lowerExclusive,
+    UInt64 commonKappa,
+    UInt64 queryLo,
+    UInt64 queryHi,
+    const MertensLookup& getMertens,
+    const QuotientCache& qCache,
+    UInt64 dCAP,
+    bool loop2
+) {
+    using Acc = S1Q6Detail::Accumulator<TArg>;
+    if (lowerExclusive == std::numeric_limits<UInt64>::max()) return Acc(0);
+    return S1Q210Detail::sumCoprime210(
+        y, queryLo, queryHi, lowerExclusive + 1, commonKappa,
+        getMertens, qCache, dCAP, loop2
     );
 }

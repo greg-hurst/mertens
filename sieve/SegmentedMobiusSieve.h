@@ -70,6 +70,10 @@ public:
     // Fills the first `size` bytes of the mu buffer with repeating stencil data.
     void fillFromStencil(UInt64 size);
 
+    // Release the segment, scheduler, and prime-quotient storage without
+    // destroying the core. Used when a later phase switches representations.
+    void releaseMemory();
+
     // --- Access ---
 
     // mu at relative index i (0-based from the last sieve's lo).

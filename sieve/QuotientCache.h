@@ -112,7 +112,13 @@ struct SieveQuotientCache {
     SieveQuotientCache& operator=(const SieveQuotientCache&) = delete;
 
     ~SieveQuotientCache() {
+        clear();
+    }
+
+    void clear() {
         std::free(ms);
+        ms = nullptr;
+        count = 0;
     }
 
     void init(const UInt32* primes, UInt32 numPrimes) {

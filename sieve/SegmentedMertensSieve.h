@@ -57,6 +57,25 @@ namespace MertensSieveDetail {
     static_assert(STRIDE_LOG >= 4 && STRIDE_LOG <= 12,
                   "see PERFORMANCE.md section 8 for stride/overflow tradeoffs");
     static constexpr UInt64 STRIDE = UInt64(1) << STRIDE_LOG;
+
+    template<typename MIntT, bool Fused>
+    struct PrefixWorkspace {
+        std::vector<MIntT> intervalSums;
+        std::vector<MIntT> threadSums;
+        std::vector<Int8> leadingMu;
+
+        void clear() {
+            std::vector<MIntT>().swap(intervalSums);
+            std::vector<MIntT>().swap(threadSums);
+            std::vector<Int8>().swap(leadingMu);
+        }
+    };
+
+    template<typename MIntT, bool Fused>
+    static inline PrefixWorkspace<MIntT, Fused>& prefixWorkspace() {
+        static PrefixWorkspace<MIntT, Fused> workspace;
+        return workspace;
+    }
 }
 
 // ============================================================================
@@ -140,6 +159,14 @@ public:
     // Access the underlying Mobius sieve.
     SegmentedMobiusSieveCore& mobiusSieve() { return mMobius; }
     const SegmentedMobiusSieveCore& mobiusSieve() const { return mMobius; }
+
+    // Release the reusable compressed-prefix workspaces for MIntT. This is
+    // useful when a later phase switches to a different sieve representation.
+    template<typename MIntT>
+    static void releasePrefixWorkspace() {
+        MertensSieveDetail::prefixWorkspace<MIntT, false>().clear();
+        MertensSieveDetail::prefixWorkspace<MIntT, true>().clear();
+    }
 
 private:
     SegmentedMobiusSieveCore mMobius;
@@ -261,23 +288,25 @@ private:
         // Reused work buffers (avoid allocation every segment).
         // Note: not safe if multiple independent sieve instances call
         // prefixSum concurrently from an outer parallel layer.
-        static std::vector<MIntT> intervalSumsBuf;
-        static std::vector<MIntT> sumaBuf;
-
-        if (intervalSumsBuf.size() < numIntervals) intervalSumsBuf.resize(numIntervals);
+        auto& workspace =
+            MertensSieveDetail::prefixWorkspace<MIntT, false>();
+        if (workspace.intervalSums.size() < numIntervals)
+            workspace.intervalSums.resize(numIntervals);
         const UInt32 maxThr = (UInt32)omp_get_max_threads();
-        if (sumaBuf.size() < maxThr) sumaBuf.resize(maxThr);
+        if (workspace.threadSums.size() < maxThr)
+            workspace.threadSums.resize(maxThr);
 
-        MIntT* intervalSums = intervalSumsBuf.data();
-        MIntT* suma         = sumaBuf.data();
+        MIntT* intervalSums = workspace.intervalSums.data();
+        MIntT* suma         = workspace.threadSums.data();
 
         // Stage A: per-interval local prefix, compute R, intervalSums, and Mub.
         // Mub (the leading mu of each interval, needed by Stage C) is captured
         // inside the loop, before R — which may alias Mu in-place — overwrites
         // it. A separate pre-pass would stride one byte per 256, which still
         // touches every other cache line: nearly half a DRAM pass for nothing.
-        static std::vector<Int8> Mub;
-        if (Mub.size() < numIntervals) Mub.resize(numIntervals);
+        if (workspace.leadingMu.size() < numIntervals)
+            workspace.leadingMu.resize(numIntervals);
+        Int8* Mub = workspace.leadingMu.data();
 
         #pragma omp parallel for schedule(static)
         for (UInt64 b = 0; b < numIntervals; ++b) {
@@ -426,18 +455,20 @@ private:
 
         if (len == 0) return;
 
-        static std::vector<MIntT> intervalSumsBuf;
-        static std::vector<MIntT> sumaBuf;
-
-        if (intervalSumsBuf.size() < numIntervals) intervalSumsBuf.resize(numIntervals);
+        auto& workspace =
+            MertensSieveDetail::prefixWorkspace<MIntT, true>();
+        if (workspace.intervalSums.size() < numIntervals)
+            workspace.intervalSums.resize(numIntervals);
         const UInt32 maxThr = (UInt32)omp_get_max_threads();
-        if (sumaBuf.size() < maxThr) sumaBuf.resize(maxThr);
+        if (workspace.threadSums.size() < maxThr)
+            workspace.threadSums.resize(maxThr);
 
-        MIntT* intervalSums = intervalSumsBuf.data();
-        MIntT* suma         = sumaBuf.data();
+        MIntT* intervalSums = workspace.intervalSums.data();
+        MIntT* suma         = workspace.threadSums.data();
 
-        static std::vector<Int8> Mub;
-        if (Mub.size() < numIntervals) Mub.resize(numIntervals);
+        if (workspace.leadingMu.size() < numIntervals)
+            workspace.leadingMu.resize(numIntervals);
+        Int8* Mub = workspace.leadingMu.data();
 
         // Stage A: per-interval fused finalize + local prefix.
         #pragma omp parallel for schedule(static)

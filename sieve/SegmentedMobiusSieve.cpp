@@ -129,6 +129,13 @@ void SegmentedMobiusSieveCore::fillFromStencil(UInt64 size) {
     }
 }
 
+void SegmentedMobiusSieveCore::releaseMemory() {
+    std::vector<Int8>().swap(mMu);
+    std::vector<Int8>().swap(mPreMu);
+    std::vector<std::vector<LargePrimeHitScheduler::PVecT>>().swap(mBuckets);
+    mSieveQCache.clear();
+}
+
 // ============================================================================
 // Utility: prime generation
 // ============================================================================

@@ -18,6 +18,14 @@
 #define MERTENSHURST_S1_Q30030_FORCE_Q210_FALLBACK 0
 #endif
 
+#ifndef MERTENSHURST_ODD_LOOP2
+#define MERTENSHURST_ODD_LOOP2 0
+#endif
+
+#ifndef MERTENSHURST_ODD_LOOP2_VALIDATE
+#define MERTENSHURST_ODD_LOOP2_VALIDATE 0
+#endif
+
 #include "MertensHurst.h"
 #include "S2Q6.h"
 #include "S1.h"
@@ -37,6 +45,9 @@
 #endif
 #include "OuterRecovery.h"
 #include "SegmentedMertensSieve.h"
+#if MERTENSHURST_ODD_LOOP2
+#include "SegmentedOddMertensSieve.h"
+#endif
 
 // Mirrors the default in SegmentedMobiusSieve.cpp; override with -DUSE_BUCKET_SIEVE=0.
 #ifndef USE_BUCKET_SIEVE
@@ -190,6 +201,20 @@ static_assert(!UseQ210Coupled
                   && !UseFullRecovery),
               "coupled Q210 requires the final-value compact unordered stack");
 #endif
+
+static constexpr bool UseOddLoop2 = MERTENSHURST_ODD_LOOP2;
+static_assert(MERTENSHURST_ODD_LOOP2 == 0
+              || MERTENSHURST_ODD_LOOP2 == 1,
+              "MERTENSHURST_ODD_LOOP2 must be 0 or 1");
+static_assert(!UseOddLoop2 || MERTENSHURST_Q210_COUPLED,
+              "odd Loop 2 requires the native Q210 contract");
+static constexpr bool ValidateOddLoop2 =
+    MERTENSHURST_ODD_LOOP2_VALIDATE;
+static_assert(MERTENSHURST_ODD_LOOP2_VALIDATE == 0
+              || MERTENSHURST_ODD_LOOP2_VALIDATE == 1,
+              "MERTENSHURST_ODD_LOOP2_VALIDATE must be 0 or 1");
+static_assert(!ValidateOddLoop2 || UseOddLoop2,
+              "odd Loop 2 validation requires the odd Loop 2 path");
 
 #ifndef MERTENSHURST_VALIDATE_UNORDERED_S2
 #define MERTENSHURST_VALIDATE_UNORDERED_S2 0
@@ -432,6 +457,11 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 
     struct timeval start, end;
     double t[10] = {0.0};
+    double oddBridgeSieveTime = 0.0;
+    double oddBridgeS1Time = 0.0;
+    double oddSetupTime = 0.0;
+    double oddSieveTime = 0.0;
+    double oddS1Time = 0.0;
 
     constexpr UInt64 BF = SegmentedMobiusSieveCore::STENCIL_PERIOD;
     constexpr UInt64 min_B = BF * ((10000000ULL + BF - 1) / BF);
@@ -1241,6 +1271,25 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 
     UInt64 L1 = 1;
     UInt64 L2 = B;
+
+    // The odd-only Loop 2 phase needs M_2(T - 1), where T is the first
+    // integer after the complete Loop 0/1 segment containing nuMax.  Record
+    // the O(log T) ordinary-Mertens checkpoints needed by
+    // M_2(z) = sum_j M(floor(z / 2^j)) while those segments are live.
+    const UInt64 loop01End = B * (nuMax / B + (nuMax % B != 0));
+    const UInt64 oddLoop2Seam = loop01End + 1;
+    std::array<UInt64, 64> oddSeedPositions{};
+    std::array<Int64, 64> oddSeedValues{};
+    UInt32 oddSeedCount = 0;
+    UInt32 oddSeedNext = 0;
+    if constexpr (UseOddLoop2) {
+        for (UInt64 value = loop01End; value != 0; value >>= 1)
+            oddSeedPositions[oddSeedCount++] = value;
+        std::reverse(
+            oddSeedPositions.begin(),
+            oddSeedPositions.begin() + oddSeedCount
+        );
+    }
 
     // kappa_y * M(nu_y) correction term. picked up incrementally as nu
     // values land in processed sieve segments.
@@ -2873,6 +2922,18 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             L2 = L1 + B - 1;
             mSieve.sieve(L1, L2, _MPrev, _MP, RP, primes);
             _MPrev = GET_M(_MP, RP, L1, L2);
+            if constexpr (UseOddLoop2) {
+                while (oddSeedNext < oddSeedCount
+                       && oddSeedPositions[oddSeedNext] <= L2) {
+#ifndef NDEBUG
+                    assert(oddSeedPositions[oddSeedNext] >= L1);
+#endif
+                    oddSeedValues[oddSeedNext] = static_cast<Int64>(GET_M(
+                        _MP, RP, L1, oddSeedPositions[oddSeedNext]
+                    ));
+                    ++oddSeedNext;
+                }
+            }
             END_PROFILE(t[prof_base + 0]);
 
             // ------------ S2 Step ------------
@@ -3085,6 +3146,26 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     MPrev = M16Prev;
     doLoop01Iteration(MP, MPrev, nuMax, 3);
 
+    Int32 oddMertensPrev = 0;
+    if constexpr (UseOddLoop2) {
+        if (L1 != oddLoop2Seam || L2 != loop01End
+            || oddSeedNext != oddSeedCount) {
+            std::cerr << "Internal error: incomplete odd Loop 2 seam seed."
+                      << std::endl;
+            std::abort();
+        }
+        Int64 seed = 0;
+        for (UInt32 i = 0; i < oddSeedCount; ++i)
+            seed += oddSeedValues[i];
+        if (seed < std::numeric_limits<Int32>::min()
+            || seed > std::numeric_limits<Int32>::max()) {
+            std::cerr << "Internal error: odd Mertens seam seed exceeds Int32."
+                      << std::endl;
+            std::abort();
+        }
+        oddMertensPrev = static_cast<Int32>(seed);
+    }
+
 #if MERTENSHURST_S1_Q30030_LADDER
     if constexpr (UseS1Q30030Ladder) {
         releaseVector(s1P11ChildMask);
@@ -3128,35 +3209,336 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     const UInt64 segmentCapRounded = BF * ((segmentCap + BF - 1) / BF);
     B = 20 * 96 * BF * static_cast<UInt64>((std::ceil(std::sqrt(2.0 * u)) + 1) / BF + 1);
     B = std::min(B, segmentCapRounded);
-    M32.resize(coarseLength(B));
-
-    mSieve.mobiusSieve().fillFromStencil(B);
-
-    // pointers — R aliases Mu (in-place prefix sum, saves ~12GB at large n)
-    MP  = M32.data();
-    RP  = mSieve.mobiusSieve().data();
-    MuP = mSieve.mobiusSieve().data();
 
     // ========================================================================
     // Main loop #2
     // ========================================================================
 
-    while (L2 < u) {
-        START_PROFILE();
-        L2 = std::min(L1 + B - 1, u);
-        mSieve.sieveInPlace(L1, L2, MPrev, MP, primes);
-        MPrev = GET_M(MP, RP, L1, L2);
-        END_PROFILE(t[6]);
+#if MERTENSHURST_ODD_LOOP2
+    const bool useOddLoop2 = useQ210Coupled;
+    if (useOddLoop2) {
+        if (!useQ6CompactHotState
+            || oddLoop2Seam > std::numeric_limits<UInt64>::max() / 2) {
+            std::cerr << "Internal error: invalid odd Loop 2 contract."
+                      << std::endl;
+            std::abort();
+        }
 
-        START_PROFILE();
-        applyS1Segment(MP, RP, L1, L2
-#if MERTENSHURST_Q30_COUPLED
-                       , true
+#if MERTENSHURST_ODD_LOOP2_VALIDATE
+        // Expensive oracle build: run the retained full-M Loop 2 from the
+        // exact seam into copies of the same row state, then restore the
+        // production accumulators.  The comparison below therefore checks
+        // every persistent row, not merely their final signed recovery.
+        std::vector<Int64> expectedLoop2Values = q6CompactValues;
+        std::vector<Int128> expectedLoop2Values128 = q6CompactValues128;
+        {
+            SegmentedMertensSieveCore referenceSieve(B);
+            std::vector<Int32> referenceM(coarseLength(B));
+            Int32 referencePrev = MPrev;
+            UInt64 referenceLo = oddLoop2Seam;
+            while (referenceLo <= u) {
+                const UInt64 referenceHi = std::min(
+                    referenceLo + B - 1, u
+                );
+                referenceSieve.sieveInPlace(
+                    referenceLo, referenceHi, referencePrev,
+                    referenceM.data(), primes
+                );
+                const Int8* referenceResidual =
+                    referenceSieve.mobiusSieve().data();
+                referencePrev = GET_M(
+                    referenceM.data(), referenceResidual,
+                    referenceLo, referenceHi
+                );
+                applyS1Segment(
+                    referenceM.data(), referenceResidual,
+                    referenceLo, referenceHi, true
+                );
+                referenceLo = referenceHi + 1;
+            }
+        }
+        q6CompactValues.swap(expectedLoop2Values);
+        q6CompactValues128.swap(expectedLoop2Values128);
 #endif
-                       );
-        END_PROFILE(t[7]);
 
-        L1 = L2 + 1;
+        const UInt64 oddIdentityStart = 2 * oddLoop2Seam;
+        const UInt64 bridgeHi = std::min(u, oddIdentityStart - 1);
+
+        // Retain exact full M only through [T, 2*T-1].  This covers every S1
+        // quotient whose halved odd-prefix argument predates the retained odd
+        // stream.  The odd sieve intentionally restarts at T below.
+        if (L1 <= bridgeHi) {
+            const UInt64 bridgeSpan = bridgeHi - L1 + 1;
+            const UInt64 bridgeSegmentSize = std::min(B, bridgeSpan);
+            M32.resize(coarseLength(bridgeSegmentSize));
+            mSieve.mobiusSieve().fillFromStencil(bridgeSegmentSize);
+            MP = M32.data();
+            RP = mSieve.mobiusSieve().data();
+
+            while (L1 <= bridgeHi) {
+                if (profile) getDayTime(start);
+                L2 = std::min(L1 + bridgeSegmentSize - 1, bridgeHi);
+                mSieve.sieveInPlace(L1, L2, MPrev, MP, primes);
+                MPrev = GET_M(MP, RP, L1, L2);
+                if (profile) {
+                    getDayTime(end);
+                    const double elapsed = getDuration(start, end);
+                    t[6] += elapsed;
+                    oddBridgeSieveTime += elapsed;
+                }
+
+                if (profile) getDayTime(start);
+                applyS1Segment(MP, RP, L1, L2, true);
+                if (profile) {
+                    getDayTime(end);
+                    const double elapsed = getDuration(start, end);
+                    t[7] += elapsed;
+                    oddBridgeS1Time += elapsed;
+                }
+                L1 = L2 + 1;
+            }
+        }
+
+        // Drop the full-width sieve before reserving the packed odd buffer.
+        // Keeping both alive would erase much of the memory benefit.
+        mSieve.releasePrefixWorkspace<Int32>();
+        mSieve.mobiusSieve().releaseMemory();
+        releaseVector(M32);
+
+        if (oddIdentityStart <= u) {
+            if (profile) getDayTime(start);
+            SegmentedOddMertensSieveCore oddSieve(B);
+            const UInt64 packedCapacity = B / 2 + (B & 1);
+            M32.resize(
+                (packedCapacity + SegmentedOddMertensSieveCore::STRIDE - 1)
+                >> SegmentedOddMertensSieveCore::STRIDE_LOG
+            );
+#if MERTENSHURST_ODD_LOOP2_VALIDATE
+            SegmentedOddMertensSieveCoreT<OddMertensStorage::Direct>
+                referenceOddSieve(B);
+            std::vector<Int32> referenceOddM(packedCapacity);
+            Int32 referenceOddPrev = oddMertensPrev;
+#endif
+            if (profile) {
+                getDayTime(end);
+                oddSetupTime += getDuration(start, end);
+            }
+
+            Int32* oddMP = M32.data();
+            UInt64 oddL1 = oddLoop2Seam;
+            while (oddL1 <= u) {
+                const UInt64 oddL2 = std::min(oddL1 + B - 1, u);
+                const Int32 segmentOddMertensPrev = oddMertensPrev;
+
+                if (profile) getDayTime(start);
+                oddSieve.sieveInPlace(
+                    oddL1, oddL2, segmentOddMertensPrev, oddMP, primes
+                );
+                const Int8* oddResidual = oddSieve.mobiusSieve().data();
+                const UInt64 firstOdd = oddSieve.mobiusSieve().firstOdd();
+                oddMertensPrev = oddSieve.getOddMertens(oddMP, oddL2);
+#if MERTENSHURST_ODD_LOOP2_VALIDATE
+                referenceOddSieve.sieveInPlace(
+                    oddL1, oddL2, referenceOddPrev,
+                    referenceOddM.data(), primes
+                );
+                const UInt64 referenceFirstOdd =
+                    referenceOddSieve.mobiusSieve().firstOdd();
+                assert(referenceFirstOdd == firstOdd);
+                assert(referenceOddSieve.mobiusSieve().oddCount()
+                       == oddSieve.mobiusSieve().oddCount());
+                referenceOddPrev = referenceOddSieve.getOddMertens(
+                    referenceOddM.data(), oddL2
+                );
+                assert(referenceOddPrev == oddMertensPrev);
+#endif
+                if (profile) {
+                    getDayTime(end);
+                    const double elapsed = getDuration(start, end);
+                    t[6] += elapsed;
+                    oddSieveTime += elapsed;
+                }
+
+                if (profile) getDayTime(start);
+                const UInt64 positiveLo = std::max(
+                    oddL1, oddIdentityStart
+                );
+                auto getOddMertens = [=](UInt64 quotient) {
+                    return GET_ODD_MERTENS_IN_RANGE(
+                        oddMP, oddResidual, firstOdd, quotient
+                    );
+                };
+#if MERTENSHURST_ODD_LOOP2_VALIDATE
+                auto getReferenceOddMertens = [=, &referenceOddM](
+                    UInt64 quotient
+                ) {
+                    const UInt64 off = (quotient - referenceFirstOdd) >> 1;
+                    return referenceOddM[off];
+                };
+#endif
+
+                #pragma omp parallel for schedule(dynamic, 1)
+                for (UInt64 workIndex = 0;
+                     workIndex < s1Q6Worklist.size();
+                     ++workIndex) {
+                    if (workIndex < q6WideCount) {
+                        const Int128 halfValue =
+                            evaluateS1OuterQ210ZeroCompleteWithLookup(
+                                q6PartialArgs128[workIndex] / 2,
+                                q6PartialArgsDivU[workIndex],
+                                q6CommonKappa[workIndex], oddL1, oddL2,
+                                getOddMertens, qCache, dCAP, true
+                            );
+                        Int128 positiveValue = 0;
+                        if (positiveLo <= oddL2) {
+                            positiveValue =
+                                evaluateS1OuterQ210ZeroCompleteWithLookup(
+                                    q6PartialArgs128[workIndex],
+                                    q6PartialArgsDivU[workIndex],
+                                    q6CommonKappa[workIndex],
+                                    positiveLo, oddL2, getOddMertens,
+                                    qCache, dCAP, true
+                                );
+                        }
+#if MERTENSHURST_ODD_LOOP2_VALIDATE
+                        const Int128 referenceHalfValue =
+                            evaluateS1OuterQ210ZeroCompleteWithLookup(
+                                q6PartialArgs128[workIndex] / 2,
+                                q6PartialArgsDivU[workIndex],
+                                q6CommonKappa[workIndex], oddL1, oddL2,
+                                getReferenceOddMertens, qCache, dCAP, true
+                            );
+                        Int128 referencePositiveValue = 0;
+                        if (positiveLo <= oddL2) {
+                            referencePositiveValue =
+                                evaluateS1OuterQ210ZeroCompleteWithLookup(
+                                    q6PartialArgs128[workIndex],
+                                    q6PartialArgsDivU[workIndex],
+                                    q6CommonKappa[workIndex],
+                                    positiveLo, oddL2,
+                                    getReferenceOddMertens,
+                                    qCache, dCAP, true
+                                );
+                        }
+                        assert(halfValue == referenceHalfValue);
+                        assert(positiveValue == referencePositiveValue);
+#endif
+                        q6CompactValues128[workIndex]
+                            += halfValue - positiveValue;
+                    } else {
+                        const Int64 halfValue =
+                            evaluateS1OuterQ210ZeroCompleteWithLookup(
+                                q6PartialArgs[workIndex] / 2,
+                                q6PartialArgsDivU[workIndex],
+                                q6CommonKappa[workIndex], oddL1, oddL2,
+                                getOddMertens, qCache, dCAP, true
+                            );
+                        Int64 positiveValue = 0;
+                        if (positiveLo <= oddL2) {
+                            positiveValue =
+                                evaluateS1OuterQ210ZeroCompleteWithLookup(
+                                    q6PartialArgs[workIndex],
+                                    q6PartialArgsDivU[workIndex],
+                                    q6CommonKappa[workIndex],
+                                    positiveLo, oddL2, getOddMertens,
+                                    qCache, dCAP, true
+                                );
+                        }
+#if MERTENSHURST_ODD_LOOP2_VALIDATE
+                        const Int64 referenceHalfValue =
+                            evaluateS1OuterQ210ZeroCompleteWithLookup(
+                                q6PartialArgs[workIndex] / 2,
+                                q6PartialArgsDivU[workIndex],
+                                q6CommonKappa[workIndex], oddL1, oddL2,
+                                getReferenceOddMertens, qCache, dCAP, true
+                            );
+                        Int64 referencePositiveValue = 0;
+                        if (positiveLo <= oddL2) {
+                            referencePositiveValue =
+                                evaluateS1OuterQ210ZeroCompleteWithLookup(
+                                    q6PartialArgs[workIndex],
+                                    q6PartialArgsDivU[workIndex],
+                                    q6CommonKappa[workIndex],
+                                    positiveLo, oddL2,
+                                    getReferenceOddMertens,
+                                    qCache, dCAP, true
+                                );
+                        }
+                        assert(halfValue == referenceHalfValue);
+                        assert(positiveValue == referencePositiveValue);
+#endif
+                        q6CompactValues[workIndex - q6WideCount]
+                            += halfValue - positiveValue;
+                    }
+                }
+                if (profile) {
+                    getDayTime(end);
+                    const double elapsed = getDuration(start, end);
+                    t[7] += elapsed;
+                    oddS1Time += elapsed;
+                }
+
+                oddL1 = oddL2 + 1;
+            }
+        }
+
+#if MERTENSHURST_ODD_LOOP2_VALIDATE
+        if (q6CompactValues.size() != expectedLoop2Values.size()
+            || q6CompactValues128.size()
+                != expectedLoop2Values128.size()) {
+            std::cerr << "Internal error: odd Loop 2 row-count mismatch."
+                      << std::endl;
+            std::abort();
+        }
+        for (UInt64 workIndex = 0;
+             workIndex < q6CompactValues128.size();
+             ++workIndex) {
+            if (q6CompactValues128[workIndex]
+                != expectedLoop2Values128[workIndex]) {
+                std::cerr << "Internal error: odd Loop 2 wide-row mismatch at "
+                          << workIndex << "." << std::endl;
+                std::abort();
+            }
+        }
+        for (UInt64 narrowIndex = 0;
+             narrowIndex < q6CompactValues.size();
+             ++narrowIndex) {
+            if (q6CompactValues[narrowIndex]
+                != expectedLoop2Values[narrowIndex]) {
+                std::cerr << "Internal error: odd Loop 2 narrow-row mismatch at "
+                          << narrowIndex + q6WideCount << "." << std::endl;
+                std::abort();
+            }
+        }
+#endif
+    } else
+#endif
+    {
+        M32.resize(coarseLength(B));
+        mSieve.mobiusSieve().fillFromStencil(B);
+
+        // R aliases Mu in-place, saving one full Loop 2 segment buffer.
+        MP = M32.data();
+        RP = mSieve.mobiusSieve().data();
+        MuP = mSieve.mobiusSieve().data();
+
+        while (L2 < u) {
+            START_PROFILE();
+            L2 = std::min(L1 + B - 1, u);
+            mSieve.sieveInPlace(L1, L2, MPrev, MP, primes);
+            MPrev = GET_M(MP, RP, L1, L2);
+            END_PROFILE(t[6]);
+
+            START_PROFILE();
+            applyS1Segment(MP, RP, L1, L2
+#if MERTENSHURST_Q30_COUPLED
+                           , true
+#endif
+                           );
+            END_PROFILE(t[7]);
+
+            L1 = L2 + 1;
+        }
     }
 
     // ========================================================================
@@ -3310,6 +3692,16 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                   << std::endl;
 #endif
 #endif
+#if MERTENSHURST_ODD_LOOP2
+        std::cout << "Odd-only Loop 2: "
+                  << (useOddLoop2 ? "active" : "full-M fallback")
+                  << std::endl;
+        if (useOddLoop2) {
+            std::cout << "  full-M seam T: " << oddLoop2Seam << std::endl;
+            std::cout << "  packed stride: "
+                      << SegmentedOddMertensSieveCore::STRIDE << std::endl;
+        }
+#endif
         std::cout << std::endl;
         if (t[0] + t[1] + t[2] > 0.0) {
             std::cout << "--------------- Loop 1 16-bit ---------------" << std::endl;
@@ -3327,6 +3719,20 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             std::cout << "--------------- Loop 2 32-bit ---------------" << std::endl;
             std::cout << "          Sieve: " << t[6] << ", " << (100.0*t[6]/tot) << "%" << std::endl;
             std::cout << "             S1: " << t[7] << ", " << (100.0*t[7]/tot) << "%" << std::endl;
+#if MERTENSHURST_ODD_LOOP2
+            if (useOddLoop2) {
+                std::cout << "   Bridge sieve: " << oddBridgeSieveTime
+                          << std::endl;
+                std::cout << "      Bridge S1: " << oddBridgeS1Time
+                          << std::endl;
+                std::cout << "      Odd sieve: " << oddSieveTime
+                          << std::endl;
+                std::cout << "  Signed odd S1: " << oddS1Time
+                          << std::endl;
+                std::cout << "      Odd setup: " << oddSetupTime
+                          << " (outside phase total)" << std::endl;
+            }
+#endif
         }
         std::cout << "------------------ Totals -------------------" << std::endl;
         std::cout << "          Sieve: " << (t[0]+t[3]+t[6]) << ", " << (100.0*(t[0]+t[3]+t[6])/tot) << "%" << std::endl;
