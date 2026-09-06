@@ -12,6 +12,8 @@ Within their documented input domains, every configuration computes the same $M(
 | `S2_OUTER_Q6` | 1 | Exact outer $Q=6$ for $S_2$. It requires `S1_OUTER_Q6=1`. Together with inner Q6 this is the normal `build/mertens` path; `make q2` preserves the all-Q2 oracle as `build/mertens_q2`. |
 | `Q30_COUPLED` | 0 | Complete outer/inner $Q=30$ promotion. Use `make q30-coupled`; the named target fixes the compatible compact unordered stack and emits `build/mertens_q30_coupled`. |
 | `Q210_COUPLED` | 0 | Complete outer/inner $Q=210$ promotion with whole-run fallback to Q30. Use `make q210-coupled`; the named target fixes the complete Q30/Q210 contract and emits `build/mertens_q210_coupled`. |
+| `ODD_LOOP2` | 0 | Replace Q210's S1-only Loop 2 with the exact packed odd-prefix identity. Use `make q210-coupled-odd-loop2`; a failed runtime Q210 guard retains the full-M fallback. |
+| `ODD_LOOP2_VALIDATE` | 0 | Compare each odd segment's positive and half-prefix S1 visits with a direct odd oracle, then compare every completed row with the full-M Loop 2. Enabled by the named validation and sanitizer targets. |
 | `FULL_RECOVERY` | 0 | Recover every square-free partial value by decreasing-index back substitution. Production instead obtains only the requested final value by direct Möbius inversion. The full path is retained as a correctness oracle. Becomes `-DMERTENSHURST_FULL_RECOVERY`; enable it with `make FULL_RECOVERY=1`. |
 
 `make s2-unordered` builds the opt-in `build/mertens_s2_unordered` profile.
@@ -37,6 +39,12 @@ comparison and the ordered-square comparator, while
 AddressSanitizer and UndefinedBehaviorSanitizer.
 `make q210-coupled-fallback` forces the Q210-to-Q30 runtime fallback in the
 same validation profile.
+
+`make q210-coupled-odd-loop2` retains that complete Q210 contract and changes
+only S1-only Loop 2. `make q210-coupled-odd-loop2-validate` retains both a
+direct odd-prefix comparison for every signed segment visit and a full-M
+comparison for every completed row. The corresponding `-sanitize` target runs
+the same checks under AddressSanitizer and UndefinedBehaviorSanitizer.
 
 `make q210-coupled-record` builds the production Q210 contract with
 `SIEVE_STRIDE_LOG=7`. This gives the compressed `Int8` Mertens residual a

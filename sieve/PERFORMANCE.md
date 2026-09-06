@@ -237,6 +237,34 @@ Two cache variants are used: `QuotientCache` for a contiguous divisor range $[1,
 
 ---
 
+## 11. Native packed odd sieve
+
+`SegmentedOddMobiusSieveCore` stores and visits only odd arguments in original
+intervals. Prime 2 disappears, odd-prime steps advance one packed slot per
+$2p$ original integers, and the large-prime scheduler works directly in packed
+coordinates. The primary byte array therefore uses exactly half the full
+sieve's capacity for the same original-coordinate span.
+
+Four alternating repetitions on the 32-thread M3 Ultra, using the release
+Makefile configuration and reporting each implementation's minimum, measured:
+
+| Inclusive interval | Original span | Full sieve | Packed odd sieve | Speedup |
+|---|---:|---:|---:|---:|
+| $[10^{12},10^{12}+2\times10^8-1]$ | $2\times10^8$ | 0.007585 s | 0.003949 s | 1.921x |
+| $[4\times10^{16},4\times10^{16}+2\times10^9-1]$ | $2\times10^9$ | 0.179843 s | 0.115584 s | 1.556x |
+
+The corresponding odd-sieve throughputs were 50.65 and 17.30 billion original
+coordinates per second. Prime generation, construction, and checksum traversal
+were outside the timer; full and packed checksums agreed on every repetition.
+
+The odd Mertens representation retains the normal 256-entry coarse stride but
+measures it in packed odd slots. Each block stores a shifted coarse base using
+its widened local prefix minimum. Since 256 samples have only 255 transitions
+of magnitude at most one, the local prefix range is at most 255, so its signed
+byte residual is exact with a worst-case proof.
+
+---
+
 ## Summary of range constraints
 
 The binding constraint depends on configuration:

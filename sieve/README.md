@@ -198,6 +198,43 @@ Compressed mode has two sieve methods:
 - `sieve()` — separate residual buffer (preserves $\mu$ data)
 - `sieveInPlace()` — residual aliases the $\mu$ buffer (saves memory)
 
+### Odd-only sieves
+
+`SegmentedOddMobiusSieveCore` and `SegmentedOddMertensSieveCore` are native
+packed sieves for odd arguments. They do not run the full sieve and filter its
+output. Public bounds and segment capacities remain in original integer
+coordinates. For inclusive `[lo, hi]`,
+
+```text
+firstOdd = first odd integer >= lo
+data[i]  = mu(firstOdd + 2*i)
+```
+
+The odd Mertens core computes
+$M_2(x)=\sum_{k\le x,\ k\text{ odd}}\mu(k)$ and explicitly supports the
+constant step across even coordinates: $M_2(2k)=M_2(2k-1)$. Its compressed
+form uses one coarse value per 256 packed odd entries plus one signed byte per
+entry. Each block shifts its coarse base by the local prefix minimum, which
+gives a worst-case proof that every residual fits in `Int8`.
+
+```cpp
+#include "SegmentedOddMertensSieve.h"
+
+UInt64 span = 10000000;
+SegmentedOddMertensSieve sieve(span);
+
+while (sieve.next()) {
+    Int32 oddM = sieve.getOddMertens(pos);
+    const Int32* coarse = sieve.getCoarseData();
+    const Int8* residual = sieve.getResidualData();
+    if (sieve.hi() >= N) break;
+}
+```
+
+The low-level `GET_ODD_MERTENS` macro mirrors `GET_M` for hot point lookups.
+`GET_ODD_MERTENS_IN_RANGE` omits the lower-bound branch when the caller proves
+that the query is at or above the segment's first packed odd value.
+
 ## Demos
 
 ```
@@ -208,6 +245,8 @@ build/demo_mertens_value <N>             # MertensSieve(N) — just prints M(N)
 build/demo_mertens_values <N>            # MertensSieveValues(N) — prints M(1)..M(20) and M(N)
 build/demo_mertens_segmented <N> [seg]   # SegmentedMertensSieve iterator
 build/demo_mertens_core <N> [seg]        # SegmentedMertensSieveCore manual loop
+build/demo_odd_mobius_core               # odd-core correctness and benchmark harness
+build/demo_odd_mertens_core              # odd-prefix identity/carry validation
 ```
 
 ```
@@ -251,6 +290,9 @@ simd_defs.h                SIMD platform detection (NEON/SSE/AVX2/AVX-512/SVE2)
 SegmentedMobiusSieve.h     Mobius sieve: core class, iterator, and MobiusSieveValues
 SegmentedMobiusSieve.cpp   Mobius sieve implementation (SIMD finalization, bucket scheduler)
 SegmentedMertensSieve.h    Mertens sieve: core class, iterator, standalone functions, and getM macro
+SegmentedOddMobiusSieve.h  Native packed odd-only Mobius sieve core
+SegmentedOddMobiusSieve.cpp Odd-only SIMD finalization and bucket scheduler
+SegmentedOddMertensSieve.h Odd-prefix core, iterator, wrappers, and hot lookup
 stencil_data.h             Precomputed 13860-element stencil array
 demo/                      Demo programs (one per API tier, for both Mobius and Mertens)
 PERFORMANCE.md             Runtime, memory layout, and range constraint analysis

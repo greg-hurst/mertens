@@ -24,7 +24,8 @@ make        # build the binary
 make q2     # build the original all-Q2 reference binary
 make s2-unordered  # build the coherent period-36/unordered-S2 profile
 make q30-coupled   # build the complete coupled Q=30 profile
-make q210-coupled  # build the fastest complete Q=210 profile
+make q210-coupled  # build the complete full-M Loop-2 Q=210 profile
+make q210-coupled-odd-loop2  # fastest measured Q=210 profile
 make q210-coupled-record  # Q=210 with rigorously bounded Int8 residuals
 make q210-coupled-native  # build the pre-ladder Q=210 baseline
 make clean  # remove build artifacts
@@ -54,6 +55,32 @@ masks and two monotone child maps are temporary and released before Loop 2
 1.35 MiB and is also released before Loop 2. Use `q210-coupled-native` for
 the exact pre-ladder baseline.
 
+The experimental `q210-coupled-odd-loop2` target changes only the S1-only
+Loop 2. It uses the exact identity
+
+$$M(x)=M_2(x)-M_2(\lfloor x/2\rfloor),\qquad
+M_2(x)=\sum_{\substack{k\le x\\k\text{ odd}}}\mu(k),$$
+
+and sieves $M_2$ natively in packed odd coordinates. The two signed terms are
+applied at their respective segment visits to the same existing S1 row and
+accumulator. A short full-M bridge handles the phase seam exactly; Loop 0/1,
+S2, unordered S2, recovery, and the factor-11/factor-13 ladder are unchanged.
+The ordinary `q210-coupled` target remains the compile-time fallback.
+
+Fixed-parameter measurements on the 32-thread M3 Ultra (`nuRatio=0.9`,
+`u-factor=0.5`, segment cap $4\times10^{11}$) gave:
+
+| Input | Full-M total | Odd total | Speedup | Peak RSS reduction |
+|---:|---:|---:|---:|---:|
+| $10^{16}$ | 0.9869 s | 0.9075 s | 1.087x | about 24% |
+| $10^{19}$ | 89.2612 s | 78.7242 s | 1.134x | 23.1% |
+| $10^{20}$ | 406.399 s | 350.960 s | 1.158x | 23.2% |
+
+The $10^{16}$ times are medians of 12 alternating runs per binary; the larger
+rows are isolated representative runs. At $10^{20}$, Loop-2 sieve time fell
+from 143.025 s to 83.297 s. The second signed S1 visit added 4.494 s, only
+7.5% of the 59.728 s sieve saving.
+
 For rigorously bounded compressed residuals on a large run,
 `q210-coupled-record` builds the same Q=210 algorithm with
 `SIEVE_STRIDE_LOG=7`. The ordinary profile retains the faster stride 8; its
@@ -74,6 +101,8 @@ The Q=210 profile has dedicated validation builds:
 make q210-coupled-validate      # ordered-square comparison enabled
 make q210-coupled-sanitize      # ASan and UBSan executable
 make q210-coupled-fallback      # validate a forced Q210-to-Q30 fallback
+make q210-coupled-odd-loop2-validate  # full-M and direct-odd row checks
+make q210-coupled-odd-loop2-sanitize  # odd Loop 2 under ASan and UBSan
 ```
 
 ### Division-free mode
@@ -162,6 +191,8 @@ src/
   main.cpp                  Driver program
 ../sieve/                   Shared segmented Mobius sieve (see sieve/README.md)
 ../sieve/SegmentedMertensSieve.h  Mertens sieve (prefix sum over Mobius values)
+../sieve/SegmentedOddMobiusSieve.h  Native packed odd-only Mobius sieve
+../sieve/SegmentedOddMertensSieve.h Odd-prefix sieve for M_2(x)
 ../sieve/QuotientCache.h    Granlund-Montgomery quotient cache (compile-time optional)
 build/                      Compiled binary (gitignored)
 ```
