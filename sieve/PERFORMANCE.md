@@ -64,7 +64,7 @@ The `SegmentedMobiusSieveCore` maintains three buffers:
 
 where $B$ is the user-specified segment size and $M_1 = 8P = 110{,}880$.
 
-When the bucket scheduler is enabled, each OpenMP thread maintains its own array of `LP_SIZE = 512` bucket vectors. In the default narrow format (`SIEVE_NARROW_ENTRY=1`) each entry is a 4-byte prime and the hit offset is recomputed per hit; the wide format packs (offset, $p \bmod M_2$, $p / M_2$, log weight) into 8 bytes and is divide-free per hit (see §6). The total bucket memory depends on how many large primes land in each sub-segment, but is typically small relative to the sieve buffer.
+When the bucket scheduler is enabled, each OpenMP thread maintains its own array of `LP_SIZE = 512` bucket vectors. The full and packed-odd sieves default to the narrow format (`SIEVE_NARROW_ENTRY=1`): each entry is a 4-byte prime and the hit offset is recomputed per hit. The wide format packs (offset, $p \bmod M_2$, $p / M_2$, log weight) into 8 bytes and is divide-free per hit (see §6). Native P6 has an independently tuned wide default (see §12). The total bucket memory depends on how many large primes land in each sub-segment, but is typically small relative to the sieve buffer.
 
 ### Mertens compressed storage
 
@@ -162,8 +162,8 @@ A possible future optimization would be to carry some bucket state across segmen
 
 ### Entry layout: narrow vs wide
 
-The bucket entry layout is build-selectable (`NARROW_ENTRY`, default 1). The
-narrow entry is just the prime (4 B): the hit offset is recomputed each
+The full and packed-odd bucket entry layout is build-selectable
+(`NARROW_ENTRY`, default 1). The narrow entry is just the prime (4 B): the hit offset is recomputed each
 sub-segment by one divide and the log weight by CLZ. The wide entry (8 B)
 packs offset, $p \bmod M_2$, $p / M_2$, and the log weight, so forwarding is a
 branchless Bresenham step with no per-hit divide — but the doubled entry
@@ -178,7 +178,8 @@ traffic. On the M3 Ultra this reduces production-sized bucket-heavy segments
 by roughly 4%; very small segments can instead lose slightly because the
 temporary-vector overhead is not sufficiently amortized. The trade-off remains
 machine-specific: on x86 the per-hit divide is costlier, so re-measure before
-trusting the ARM-tuned default.
+trusting the ARM-tuned default. Native P6 uses a separate entry-layout knob and
+has a different measured default (§12).
 
 ---
 
@@ -280,6 +281,13 @@ wheel residues. If $R=(\mathtt{LP\_SIZE}-1)M_2$, the conservative schedulable
 prime bound is $(3R-1)/4$; with the default 512 buckets this is 339,958,079.
 The packed wheel has no mod-4 forwarding skip.
 
+P6 bucket tuning is deliberately isolated from the full and packed-odd
+schedulers. `COPRIME6_NARROW_ENTRY=0` selects its default 8-byte divide-free
+entry while `NARROW_ENTRY=1` remains in force elsewhere. Its direct-sieve
+cutoff is `COPRIME6_DIRECT_CUTOFF_MULT=2200`, or $2200 \times 770 =
+1{,}694{,}000$. The cutoff must exceed $1728 \times 770$ so a forwarded large-
+prime hit cannot remain in the current sub-segment.
+
 A development benchmark over $[10^{12},10^{12}+10^8-1]$, excluding prime
 generation, construction, and checksum traversal, measured:
 
@@ -291,6 +299,23 @@ generation, construction, and checksum traversal, measured:
 These short equal-span measurements validate the intended direction; the
 integrated Mertens result depends on both the reduced sieve work and the extra
 signed $M_6$ visits and is measured separately.
+
+The local wide-entry/cutoff defaults were also compared against the prior P6
+narrow-entry/cutoff-3600 pair while the full reference sieve remained narrow.
+The following are medians of 32-thread runs over an original-coordinate span of
+$3 \times 10^9$:
+
+| Window start | Repetitions | Prior P6 pair | Local P6 defaults | Speedup |
+|---:|---:|---:|---:|---:|
+| $10^{12}$ | 11 | 0.045259 s | 0.045170 s | 1.002x |
+| $10^{14}$ | 11 | 0.094007 s | 0.079300 s | 1.185x |
+| $10^{16}$ | 7 | 0.177937 s | 0.150089 s | 1.186x |
+
+The wide scheduler raises fixed empty-vector overhead from about 13 KB to 192
+KB per thread and doubles live-entry payload from 4 to 8 bytes. On the
+$10^{14}$ window above, peak RSS rose from 4,896,391,168 to 5,132,812,288
+bytes (+4.83%) while sieve time fell 15.64%. This is a P6-specific tradeoff;
+the full and P2 defaults are unchanged.
 
 The corresponding Mertens representation computes
 $M_6(x)=\sum_{n\le x,(n,6)=1}\mu(n)$ directly in packed coordinates. As for

@@ -22,11 +22,19 @@ SUB_BUCKETS ?= 1
 SUB_SHIFT   ?= 17
 NARROW_SUB_SHIFT ?= 16
 
-# --- Bucket entry layout: 1 = narrow/prime-only/divide-per-hit (DEFAULT, 4 B;
+# --- Full/packed-odd bucket entry layout ---
+# 1 = narrow/prime-only/divide-per-hit (DEFAULT, 4 B;
 # current hits transiently cache-banded), 0 = wide/packed/divide-free (8 B).
 # Narrow wins at scale on many-core ARM; on x86 the per-hit divide is costlier,
 # so re-measure there. See PERFORMANCE.md section 6.
 NARROW_ENTRY ?= 1
+
+# --- Coprime-6 bucket geometry (P=6 demos only) ---
+COPRIME6_NARROW_ENTRY ?= 0
+COPRIME6_DIRECT_CUTOFF_MULT ?= 2200
+COPRIME6_CXXFLAGS = \
+        -DCOPRIME6_SIEVE_NARROW_ENTRY=$(COPRIME6_NARROW_ENTRY) \
+        -DCOPRIME6_SIEVE_DIRECT_CUTOFF_MULT=$(COPRIME6_DIRECT_CUTOFF_MULT)
 
 # --- Base flags (all platforms) ---
 CXXFLAGS := -O3 -std=c++17 \
@@ -84,7 +92,7 @@ $(BUILDDIR)/demo_coprime6_mobius_core: \
         SegmentedMobiusSieve.cpp SegmentedCoprime6MobiusSieve.cpp \
         $(wildcard *.h)
 	@mkdir -p $(BUILDDIR)
-	$(CXX) $(CXXFLAGS) -I. $< SegmentedMobiusSieve.cpp \
+	$(CXX) $(CXXFLAGS) $(COPRIME6_CXXFLAGS) -I. $< SegmentedMobiusSieve.cpp \
 		SegmentedCoprime6MobiusSieve.cpp -o $@ $(LDFLAGS)
 
 $(BUILDDIR)/demo_coprime6_mertens_core: \
@@ -92,7 +100,7 @@ $(BUILDDIR)/demo_coprime6_mertens_core: \
         SegmentedMobiusSieve.cpp SegmentedCoprime6MobiusSieve.cpp \
         $(wildcard *.h)
 	@mkdir -p $(BUILDDIR)
-	$(CXX) $(CXXFLAGS) -I. $< SegmentedMobiusSieve.cpp \
+	$(CXX) $(CXXFLAGS) $(COPRIME6_CXXFLAGS) -I. $< SegmentedMobiusSieve.cpp \
 		SegmentedCoprime6MobiusSieve.cpp -o $@ $(LDFLAGS)
 
 clean:

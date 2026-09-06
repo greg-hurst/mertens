@@ -19,7 +19,7 @@ static constexpr bool UseCoprime6BucketSieve = USE_BUCKET_SIEVE;
 #define COPRIME6_SIEVE_MEDIUM_TILE_MULT 3024
 #endif
 #ifndef COPRIME6_SIEVE_DIRECT_CUTOFF_MULT
-#define COPRIME6_SIEVE_DIRECT_CUTOFF_MULT 3600
+#define COPRIME6_SIEVE_DIRECT_CUTOFF_MULT 2200
 #endif
 static constexpr UInt64 MEDIUM_TILE_SWITCH = UInt64(1) << 36;
 static constexpr UInt64 MEDIUM_TILE_LARGE =
@@ -28,6 +28,10 @@ static constexpr UInt64 MEDIUM_TILE_LARGE =
 static constexpr UInt64 TILED_DIRECT_SIEVE_CUTOFF =
     UInt64(COPRIME6_SIEVE_DIRECT_CUTOFF_MULT)
     * SegmentedCoprime6MobiusSieveCore::STENCIL_PERIOD;
+static_assert(COPRIME6_SIEVE_DIRECT_CUTOFF_MULT
+                  > (3 * COPRIME6_SIEVE_M2_MULT) / 2,
+              "coprime-6 direct cutoff must keep forwarded hits out of "
+              "the current sub-segment");
 
 // ============================================================================
 // Construction and coordinate helpers
@@ -825,7 +829,7 @@ void SegmentedCoprime6MobiusSieveCore::LargePrimeHitScheduler::bucketPush(
 SegmentedCoprime6MobiusSieveCore::LargePrimeHitScheduler::EntryT
 SegmentedCoprime6MobiusSieveCore::LargePrimeHitScheduler::packEntry(
     UInt32 p, UInt64 off, bool quotientResidueOne) noexcept {
-#if SIEVE_NARROW_ENTRY
+#if COPRIME6_SIEVE_NARROW_ENTRY
     (void)off;
     (void)quotientResidueOne;
     return p;
@@ -846,7 +850,7 @@ void SegmentedCoprime6MobiusSieveCore::LargePrimeHitScheduler::sieveSubSegment(
     }
 
     const UInt64 base = mPackedBase + mCurrentSubSegIndex * M2;
-#if !SIEVE_NARROW_ENTRY
+#if !COPRIME6_SIEVE_NARROW_ENTRY
     const UInt64 lastOff = (mPackedCount - 1) - mFinalSubSegIndex * M2;
 #endif
     const UInt64 ring0 = (mCurrentSubSegIndex & (LP_SIZE - 1)) * LP_SUBS;
@@ -856,7 +860,7 @@ void SegmentedCoprime6MobiusSieveCore::LargePrimeHitScheduler::sieveSubSegment(
         const EntryT* entryData = entries.data();
         const size_t n = entries.size();
 
-#if SIEVE_NARROW_ENTRY
+#if COPRIME6_SIEVE_NARROW_ENTRY
         const UInt64 firstIndex = subSegFirstPackedIndex(mCurrentSubSegIndex);
 #if COPRIME6_SIEVE_NARROW_SUBS_ACTIVE
         for (size_t i = 0; i < n; ++i) {

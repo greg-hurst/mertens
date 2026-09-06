@@ -6,7 +6,9 @@ Within their documented input domains, every configuration computes the same $M(
 |---|---|---|
 | `DIVISION_FREE` | 1 on x86, 0 on ARM | Quotient strategy for the hot $S_1$/$S_2$ loops and the sieve. On ARM, hardware division is fast and the direct path wins. On x86 the division-free path (Granlund-Montgomery cache + quotient predictor) wins. Auto-detected; override with `make DIVISION_FREE=0/1`. |
 | `BUCKET_SIEVE` | 1 | Large-prime bucket scheduler in the sieve. P1/P2 use the ordinary $u \le 2.05 \times 10^{17}$ cap; active P6 uses its independently proven $u \le 115{,}571{,}495{,}477{,}370{,}241$ cap. `make BUCKET_SIEVE=0` removes this scheduler constraint at a large speed cost. The next cap is $2^{60}-2^{32}$ when `DIVISION_FREE=1`, or the roughly $1.8 \times 10^{19}$ encoding/prime limit when it is off. |
-| `SIEVE_BUCKET_NARROW_ENTRY` | 1 | Bucket entry format, passed to the sieve. Narrow (prime-only) is fastest on the ARM record machines; wide may win on x86. Details in the sieve flags doc. |
+| `SIEVE_BUCKET_NARROW_ENTRY` | 1 | Full/P1 and packed-odd/P2 bucket entry format. Narrow (prime-only) is fastest on the ARM record machines; wide may win on x86. It does not override native P6. |
+| `COPRIME6_NARROW_ENTRY` | 0 | Native P6 bucket entry format. Its independently measured default is the 8-byte wide, divide-free layout; full/P1 and P2 remain narrow. |
+| `COPRIME6_DIRECT_CUTOFF_MULT` | 2200 | Native P6 direct-sieve cutoff in 770-entry stencil periods. Values at or below 1728 are rejected by the scheduler's forwarding invariant. |
 | `FUSED_FINALIZE` | 1 | Fold Möbius finalization into the Mertens prefix scan in Loop 2, avoiding a separate pass over the sieve buffer. Drives both `-DSIEVE_FUSED_FINALIZE` and `-DSIEVE_COPRIME6_FUSED_FINALIZE`. |
 | `S1_OUTER_Q6` | 1 | Exact outer $Q=6$ transform for $S_1$. Set this and `S2_OUTER_Q6` to `0`, or use `make q2`, to build the original all-$Q=2$ reference path. |
 | `S2_OUTER_Q6` | 1 | Exact outer $Q=6$ for $S_2$. It requires `S1_OUTER_Q6=1`. Together with inner Q6 this is the normal `build/mertens` path; `make q2` preserves the all-Q2 oracle as `build/mertens_q2`. |
@@ -59,7 +61,11 @@ compatibility.
 worst-case proof for record-scale runs. The ordinary target retains the
 slightly faster stride 8, whose much larger practical range is heuristic.
 
-The MertensHurst Makefile names its narrow-entry setting `SIEVE_BUCKET_NARROW_ENTRY`; the standalone sieve Makefile names the corresponding setting `NARROW_ENTRY`. Both produce the compiler define `SIEVE_NARROW_ENTRY`.
+The MertensHurst Makefile names the full/P2 narrow-entry setting
+`SIEVE_BUCKET_NARROW_ENTRY`; the standalone sieve Makefile calls it
+`NARROW_ENTRY`. Both produce `SIEVE_NARROW_ENTRY`. Native P6 instead uses
+`COPRIME6_NARROW_ENTRY` and `COPRIME6_DIRECT_CUTOFF_MULT`, which produce the
+corresponding `COPRIME6_SIEVE_*` defines only on P6 targets.
 
 Any sieve define can be passed through the hook, e.g. `make EXTRA_CXXFLAGS="-DSIEVE_LP_SIZE=1024"`.
 

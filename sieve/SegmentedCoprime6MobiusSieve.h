@@ -160,10 +160,10 @@ private:
 #endif
 
     struct LargePrimeHitScheduler {
-#ifndef SIEVE_NARROW_ENTRY
-#define SIEVE_NARROW_ENTRY 1
+#ifndef COPRIME6_SIEVE_NARROW_ENTRY
+#define COPRIME6_SIEVE_NARROW_ENTRY 0
 #endif
-#if SIEVE_NARROW_ENTRY
+#if COPRIME6_SIEVE_NARROW_ENTRY
         using EntryT = UInt32;
 #else
         using EntryT = UInt64;
@@ -178,21 +178,33 @@ private:
         static constexpr UInt64 LP_PHASE_MASK = UInt64(1) << LP_PHASE_SHIFT;
         static constexpr int    LP_LOG_SHIFT  = LP_PHASE_SHIFT + 1;
 
-#ifndef SIEVE_LP_SIZE
-#define SIEVE_LP_SIZE 512
+#ifndef COPRIME6_SIEVE_LP_SIZE
+#ifdef SIEVE_LP_SIZE
+#define COPRIME6_SIEVE_LP_SIZE SIEVE_LP_SIZE
+#else
+#define COPRIME6_SIEVE_LP_SIZE 512
 #endif
-        static constexpr UInt64 LP_SIZE = SIEVE_LP_SIZE;
+#endif
+        static constexpr UInt64 LP_SIZE = COPRIME6_SIEVE_LP_SIZE;
         static_assert(LP_SIZE >= 2 && (LP_SIZE & (LP_SIZE - 1)) == 0,
                       "LP_SIZE must be a power of two of at least 2");
 
-#ifndef SIEVE_SUB_BUCKETS
-#define SIEVE_SUB_BUCKETS 1
+#ifndef COPRIME6_SIEVE_SUB_BUCKETS
+#ifdef SIEVE_SUB_BUCKETS
+#define COPRIME6_SIEVE_SUB_BUCKETS SIEVE_SUB_BUCKETS
+#else
+#define COPRIME6_SIEVE_SUB_BUCKETS 1
 #endif
-#if SIEVE_SUB_BUCKETS && !SIEVE_NARROW_ENTRY
-#ifndef SIEVE_SUB_SHIFT
-#define SIEVE_SUB_SHIFT 17
 #endif
-        static constexpr int LP_SUB_SHIFT = SIEVE_SUB_SHIFT;
+#if COPRIME6_SIEVE_SUB_BUCKETS && !COPRIME6_SIEVE_NARROW_ENTRY
+#ifndef COPRIME6_SIEVE_SUB_SHIFT
+#ifdef SIEVE_SUB_SHIFT
+#define COPRIME6_SIEVE_SUB_SHIFT SIEVE_SUB_SHIFT
+#else
+#define COPRIME6_SIEVE_SUB_SHIFT 17
+#endif
+#endif
+        static constexpr int LP_SUB_SHIFT = COPRIME6_SIEVE_SUB_SHIFT;
         static_assert(LP_SUB_SHIFT > 0 && LP_SUB_SHIFT <= LP_OFF_BITS,
                       "wide sub-bucket shift must fit the packed offset field");
         static constexpr UInt64 LP_SUBS = UInt64(1) << (LP_OFF_BITS - LP_SUB_SHIFT);
@@ -203,14 +215,18 @@ private:
 #endif
         static constexpr UInt64 LP_NBUCKETS = LP_SIZE * LP_SUBS;
 
-#if SIEVE_SUB_BUCKETS && SIEVE_NARROW_ENTRY
-#ifndef SIEVE_NARROW_SUB_SHIFT
-#define SIEVE_NARROW_SUB_SHIFT 16
+#if COPRIME6_SIEVE_SUB_BUCKETS && COPRIME6_SIEVE_NARROW_ENTRY
+#ifndef COPRIME6_SIEVE_NARROW_SUB_SHIFT
+#ifdef SIEVE_NARROW_SUB_SHIFT
+#define COPRIME6_SIEVE_NARROW_SUB_SHIFT SIEVE_NARROW_SUB_SHIFT
+#else
+#define COPRIME6_SIEVE_NARROW_SUB_SHIFT 16
 #endif
-        static_assert(SIEVE_NARROW_SUB_SHIFT > 0
-                   && SIEVE_NARROW_SUB_SHIFT <= LP_OFF_BITS,
+#endif
+        static_assert(COPRIME6_SIEVE_NARROW_SUB_SHIFT > 0
+                   && COPRIME6_SIEVE_NARROW_SUB_SHIFT <= LP_OFF_BITS,
                       "narrow sub-bucket shift must fit the offset field");
-        static constexpr int LP_TRANSIENT_SHIFT = SIEVE_NARROW_SUB_SHIFT;
+        static constexpr int LP_TRANSIENT_SHIFT = COPRIME6_SIEVE_NARROW_SUB_SHIFT;
         static constexpr UInt64 LP_TRANSIENT_SUBS =
             UInt64(1) << (LP_OFF_BITS - LP_TRANSIENT_SHIFT);
         using TransientHitVecT = std::vector<UInt32>;

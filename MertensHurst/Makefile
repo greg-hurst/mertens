@@ -15,11 +15,19 @@ endif
 # Override with: make BUCKET_SIEVE=0
 BUCKET_SIEVE ?= 1
 
-# --- Bucket entry layout: 1 = narrow/prime-only/divide-per-hit (DEFAULT, 4 B),
+# --- Full/P2 bucket entry layout: 1 = narrow/prime-only/divide-per-hit
+# (DEFAULT, 4 B),
 # 0 = wide/packed/divide-free (8 B). Narrow wins at scale on many-core ARM;
 # wide may win where the per-hit divide is costlier. See
 # ../sieve/PERFORMANCE.md section 6. Override with: make SIEVE_BUCKET_NARROW_ENTRY=0
 SIEVE_BUCKET_NARROW_ENTRY ?= 1
+
+# --- Coprime-6 bucket geometry (P=6 Loop 2 only) ---
+# Independent of the full/P2 setting above.
+# The native P=6 scheduler is faster with divide-free wide entries on ARM,
+# without changing the full or odd sieve entry format.
+COPRIME6_NARROW_ENTRY ?= 0
+COPRIME6_DIRECT_CUTOFF_MULT ?= 2200
 
 # --- Fused finalize + Mertens prefix (default: on) ---
 # When 1, Loop 2's in-place sieve skips the in-sieve mu finalization and folds
@@ -281,10 +289,14 @@ Q210_LOOP2_P2_FALLBACK_CXXFLAGS = $(Q210_LOOP2_P2_VALIDATE_CXXFLAGS) \
                                   -DMERTENSHURST_S1_Q30030_FORCE_Q210_FALLBACK=1
 Q210_LOOP2_P6_CXXFLAGS = $(Q210_CONTRACT_CXXFLAGS) \
                          -DMERTENSHURST_LOOP2_SIEVE_P=6 \
-                         -DMERTENSHURST_LOOP2_SIEVE_VALIDATE=0
+                         -DMERTENSHURST_LOOP2_SIEVE_VALIDATE=0 \
+                         -DCOPRIME6_SIEVE_NARROW_ENTRY=$(COPRIME6_NARROW_ENTRY) \
+                         -DCOPRIME6_SIEVE_DIRECT_CUTOFF_MULT=$(COPRIME6_DIRECT_CUTOFF_MULT)
 Q210_LOOP2_P6_VALIDATE_CXXFLAGS = $(Q210_CONTRACT_CXXFLAGS) \
                                   -DMERTENSHURST_LOOP2_SIEVE_P=6 \
                                   -DMERTENSHURST_LOOP2_SIEVE_VALIDATE=1 \
+                                  -DCOPRIME6_SIEVE_NARROW_ENTRY=$(COPRIME6_NARROW_ENTRY) \
+                                  -DCOPRIME6_SIEVE_DIRECT_CUTOFF_MULT=$(COPRIME6_DIRECT_CUTOFF_MULT) \
                                   -UNDEBUG
 Q210_LOOP2_P6_SANITIZE_CXXFLAGS = $(filter-out -O3 -flto -DNDEBUG,$(Q210_LOOP2_P6_VALIDATE_CXXFLAGS)) \
                                   -O1 -g -fsanitize=address,undefined \
