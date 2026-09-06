@@ -142,7 +142,7 @@ At $n=10^{26}$, $\sqrt u\approx158.9$ million, so all scheduled primes remain be
 
 ## 5. Bucket-scheduler reach
 
-**Source:** `../sieve/SegmentedMobiusSieve.h`, `../sieve/SegmentedMobiusSieve.cpp`, `src/MertensHurst.cpp`
+**Source:** `../sieve/SegmentedMobiusSieve.h`, `../sieve/SegmentedMobiusSieve.cpp`, `../sieve/SegmentedCoprime6MobiusSieve.h`, `src/MertensHurst.cpp`
 
 The large-prime scheduler uses a circular buffer of `LP_SIZE` buckets. Its exact largest schedulable prime is
 
@@ -160,9 +160,25 @@ so it requires $\sqrt u$ not to exceed that reach.
 
 The 512-bucket configuration is used for record runs and is described in Section 7 of the paper. Build with `make EXTRA_CXXFLAGS=-DSIEVE_LP_SIZE=1024` for the second row. The runtime derives its cap from `SegmentedMobiusSieveCore::schedulerReach()` for every source of $u$: the default formula, `--u`, or `--u-factor`.
 
-Exactly 1024 buckets fit the wide entry's 10-bit stride field. The current unconditional `static_assert` applies to the common scheduler layout, so going beyond 1024 requires widening or repacking that field, or separating the narrow prime-only representation from the wide layout. For sufficiently large future values, the runtime calculation of `reach * reach` must also be performed and clamped in `UInt128` rather than `UInt64`.
+The native P6 Loop-2 scheduler has a different alternating packed-hit
+geometry. With `LP_SIZE=512`, its proven prime reach is 339,958,079 and its
+maximum $u$ is 115,571,495,477,370,241. A P6 binary checks this stricter bound
+only after the runtime Q210 guard selects the P6 backend. If that guard falls
+back, Loop 2 remains in the ordinary full-M scheduler domain above.
 
-Increasing $M_2$ is another possible way to increase reach, but it is constrained by the 21-bit offset field, the required ordering of the sieve thresholds, and cache/performance effects; it is not a drop-in capacity change.
+For the ordinary and odd schedulers, exactly 1024 buckets fit the wide entry's
+10-bit stride field. Their current unconditional `static_assert` applies to
+that shared layout, so going beyond 1024 requires widening or repacking the
+field, or separating the narrow prime-only representation from the wide
+layout. P6 uses its own prime/phase entry layout and independently proven
+reach. For sufficiently large future values, every runtime calculation of
+`reach * reach` must also be performed and clamped in `UInt128` rather than
+`UInt64`.
+
+Increasing the ordinary/odd scheduler's $M_2$ is another possible way to
+increase reach, but it is constrained by the 21-bit offset field, the required
+ordering of the sieve thresholds, and cache/performance effects; it is not a
+drop-in capacity change.
 
 Building with `make BUCKET_SIEVE=0` sends all large primes through direct iteration and removes **this scheduler constraint only**. Every whole-algorithm limit in the remaining sections still applies.
 

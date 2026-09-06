@@ -27,6 +27,7 @@ make q30-coupled   # build the complete coupled Q=30 profile
 make q210-coupled  # build the complete full-M Loop-2 Q=210 profile
 make q210-coupled-loop2-p1  # explicit compile-time full-M Loop 2
 make q210-coupled-loop2-p2  # explicit compile-time packed-odd Loop 2
+make q210-coupled-loop2-p6  # explicit compile-time packed-coprime-6 Loop 2
 make q210-coupled-odd-loop2  # compatibility alias for the P2 binary
 make q210-coupled-record  # Q=210 with rigorously bounded Int8 residuals
 make q210-coupled-native  # build the pre-ladder Q=210 baseline
@@ -58,7 +59,7 @@ masks and two monotone child maps are temporary and released before Loop 2
 the exact pre-ladder baseline.
 
 The compile-time `LOOP2_SIEVE_P` selector changes only the S1-only Loop 2.
-The `q210-coupled-loop2-p1` target retains full $M$, and
+The `q210-coupled-loop2-p1` target retains full $M$,
 `q210-coupled-loop2-p2` uses the exact identity
 
 $$M(x)=M_2(x)-M_2(\lfloor x/2\rfloor),\qquad
@@ -73,6 +74,21 @@ not overlap a second full-size allocation. The main odd phase still consumes
 the full stored-entry budget. A P2 binary whose runtime Q210 guard fails uses
 the compiled full-$M$ fallback. The historical `q210-coupled-odd-loop2`
 targets and binary paths remain aliases for compatibility.
+
+The `q210-coupled-loop2-p6` target instead uses
+
+$$M(x)=M_6(x)-M_6(\lfloor x/2\rfloor)-M_6(\lfloor x/3\rfloor)
+       +M_6(\lfloor x/6\rfloor),\qquad
+M_6(x)=\sum_{\substack{k\le x\\(k,6)=1}}\mu(k),$$
+
+with a native packed coprime-to-6 sieve. Its M6 stream starts at one with
+zero carry. Each Q210 row computes one denominator interval from the original
+unscaled numerator and applies the four signed M6 visits to the existing row
+accumulator when their prefix arguments enter the live segment. There is no
+full-M bridge or retained M6 prefix history. At the same stored-entry cap, a
+P6 segment covers three times the original-coordinate span of P1. A failed
+runtime Q210 guard still activates the full-M backend with the P1 scheduler
+domain. The stricter P6 scheduler reach is enforced only when P6 is active.
 
 Fixed-parameter measurements on the 32-thread M3 Ultra (`nuRatio=0.9`,
 `u-factor=0.5`, segment cap $4\times10^{11}$) gave:
@@ -112,6 +128,9 @@ make q210-coupled-fallback      # validate a forced Q210-to-Q30 fallback
 make q210-coupled-loop2-p2-validate  # full-M and direct-odd row checks
 make q210-coupled-loop2-p2-sanitize  # P2 Loop 2 under ASan and UBSan
 make q210-coupled-loop2-p2-fallback  # force and validate P2-to-P1 fallback
+make q210-coupled-loop2-p6-validate  # full-M/direct-M6/stream/row checks
+make q210-coupled-loop2-p6-sanitize  # P6 Loop 2 under ASan and UBSan
+make q210-coupled-loop2-p6-fallback  # force and validate P6-to-P1 fallback
 ```
 
 ### Division-free mode
@@ -142,8 +161,8 @@ where `n` is an integer with $10^8 \le n \le 10^{26}$, in plain decimal or scien
 Options:
 
 - `--profile` (or `-p`): print a timing breakdown by computation phase, along with the parameter values used.
-- `--segment-cap <len>`: cap on stored sieve entries in the large-segment phase (default: 12000000000, about 12 GB — plus compressed-prefix state). The full sieve stores one entry per integer; the packed odd Loop 2 sieve stores one entry per odd integer and therefore covers roughly twice the integer span at the same cap. Larger caps mean fewer sieve passes but more memory; the value is rounded up to a multiple of the stencil period (13860). Raise it for very large inputs (the $10^{25}$ record run used $4 \times 10^{11}$) if you have the RAM; budget the full memory model in `INPUT_BOUNDS.md` before a $10^{26}$ run.
-- `--u <value>`: set the sieve truncation point $u$ directly, bypassing the default formula. Must satisfy $0 < u < n$. Hard caps are enforced at runtime per build: $u \le 2.05 \times 10^{17}$ with the bucket scheduler (the default), and $u \lesssim 1.8 \times 10^{19}$ always (UInt32 primes / byte encoding). On `DIVISION_FREE=1` builds also keep $u < 2^{60} - 2^{32}$ (see `INPUT_BOUNDS.md` constraints 3-5). Larger $u$ shifts work from S1/S2 summation into sieving; smaller $u$ does the opposite.
+- `--segment-cap <len>`: cap on stored sieve entries in the large-segment phase (default: 12000000000, about 12 GB — plus compressed-prefix state). The P1, packed-P2, and packed-P6 Loop 2 sieves cover one, two, and three original integers per stored entry, respectively. Larger caps mean fewer sieve passes but more memory; the value is rounded up to a multiple of the stencil period (13860). Raise it for very large inputs (the $10^{25}$ record run used $4 \times 10^{11}$) if you have the RAM; budget the full memory model in `INPUT_BOUNDS.md` before a $10^{26}$ run.
+- `--u <value>`: set the sieve truncation point $u$ directly, bypassing the default formula. Must satisfy $0 < u < n$. Hard caps are enforced at runtime per build: P1/P2 permit $u \le 2.05 \times 10^{17}$ with the bucket scheduler, while active P6 permits $u \le 115{,}571{,}495{,}477{,}370{,}241$; all modes require $u \lesssim 1.8 \times 10^{19}$ from UInt32 primes and byte encoding. On `DIVISION_FREE=1` builds also keep $u < 2^{60} - 2^{32}$ (see `INPUT_BOUNDS.md` constraints 3-5). Larger $u$ shifts work from S1/S2 summation into sieving; smaller $u$ does the opposite.
 - `--u-factor <value>`: override the scaling factor in the $u$ formula: $u = \lceil \text{factor} \cdot (n / \ln \ln n)^{2/3} \rceil$. Must be positive. The default factor is $\max(0.30, \min(0.55, 0.55 - 0.025(\log_{10} n - 16)))$: $0.55$ through $10^{16}$, decreasing by $0.025$ per decade to $0.30$ at $10^{26}$. Mutually exclusive with `--u`.
 - `--nu-ratio <value>`: S1/S2 split ratio (default: $0.9$). Controls the boundary between the S1 (Mertens sum) and S2 (Möbius sum) ranges via $\nu(x) = \lfloor \text{ratio} \cdot \sqrt{x} \rfloor$. Must be positive. Affects only performance, not correctness.
 
@@ -202,6 +221,8 @@ src/
 ../sieve/SegmentedMertensSieve.h  Mertens sieve (prefix sum over Mobius values)
 ../sieve/SegmentedOddMobiusSieve.h  Native packed odd-only Mobius sieve
 ../sieve/SegmentedOddMertensSieve.h Odd-prefix sieve for M_2(x)
+../sieve/SegmentedCoprime6MobiusSieve.h Native packed coprime-to-6 Mobius sieve
+../sieve/SegmentedCoprime6MertensSieve.h Prefix sieve for M_6(x)
 ../sieve/QuotientCache.h    Granlund-Montgomery quotient cache (compile-time optional)
 build/                      Compiled binary (gitignored)
 ```
