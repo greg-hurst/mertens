@@ -64,8 +64,10 @@ static void printUsage(const char* prog) {
                  " (default: 12000000000, about 12 GB)" << std::endl;
     std::cerr << "  --u <value>          set the sieve truncation point directly" << std::endl;
     std::cerr << "  --u-factor <value>   set the u scaling factor"
-                 " (default: 0.55 at 1e16 to 0.30 at 1e26)" << std::endl;
-    std::cerr << "  --nu-ratio <value>   S1/S2 split ratio (default: 0.9)" << std::endl;
+                 " (default depends on LOOP2_SIEVE_P)" << std::endl;
+    std::cerr << "  --nu-ratio <value>   S1/S2 split ratio"
+                 " (compiled default: " << MertensHurstDefaultNuRatio()
+              << ")" << std::endl;
     std::cerr << std::endl;
     std::cerr << "  --u and --u-factor are mutually exclusive." << std::endl;
     std::cerr << "  Bounds: 0 < u < n. u-factor > 0. nu-ratio > 0. Hard caps on u are enforced per build (see INPUT_BOUNDS.md)." << std::endl;
@@ -82,7 +84,7 @@ int main(int argc, char* argv[]) {
     UInt64 segmentCap = 12000000000ULL;
     UInt64 uOverride = 0;
     double uFactor = 0.0;
-    double nuRatio = 0.9;
+    double nuRatio = MertensHurstDefaultNuRatio();
     const char* nstr = nullptr;
 
     for (int i = 1; i < argc; ++i) {

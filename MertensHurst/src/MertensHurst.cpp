@@ -210,6 +210,14 @@ static_assert(Loop2SieveP == 1 || Loop2SieveP == 2 || Loop2SieveP == 6,
 static constexpr bool UseRestrictedLoop2 = Loop2SieveP != 1;
 static constexpr bool UseOddLoop2 = Loop2SieveP == 2;
 static constexpr bool UseCoprime6Loop2 = Loop2SieveP == 6;
+static constexpr double DefaultUFactorFloor = 0.30;
+static constexpr double DefaultUFactorSlope = 0.025;
+static constexpr double DefaultUFactorMaximum =
+    Loop2SieveP == 2 ? 0.70 : Loop2SieveP == 6 ? 0.75 : 0.55;
+static constexpr double DefaultUFactorAnchorDecade =
+    Loop2SieveP == 1 ? 16.0 : 18.0;
+static constexpr double DefaultNuRatio =
+    Loop2SieveP == 2 ? 0.95 : Loop2SieveP == 6 ? 1.00 : 0.90;
 static_assert(!UseRestrictedLoop2 || MERTENSHURST_Q210_COUPLED,
               "restricted Loop 2 requires the native Q210 contract");
 static constexpr bool ValidateLoop2Sieve =
@@ -349,9 +357,9 @@ UInt64 MertensComputer::isqrt_u128(const UInt128& a) {
     return x;
 }
 
-// nu_y = floor(c * sqrt(y)), c = 0.9 by default. Bigger c means more
+// nu_y = floor(c * sqrt(y)). Bigger c means more
 // work in S1 (cheap per-term: just an array lookup) and less in S2
-// (expensive: sums over M). 0.9 is tuned for the production Q210 path.
+// (expensive: sums over M). The tuned default depends on Loop2SieveP.
 UInt64 MertensComputer::get_nu(const UInt128& x) {
     return static_cast<UInt64>(mNuRatio * static_cast<double>(isqrt_u128(x)));
 }
@@ -482,7 +490,10 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         u = uOverride;
     } else {
         double fac = std::clamp(
-            0.55 - 0.025 * (std::log10((double)n) - 16.0), 0.3, 0.55
+            DefaultUFactorMaximum
+                - DefaultUFactorSlope
+                    * (std::log10((double)n) - DefaultUFactorAnchorDecade),
+            DefaultUFactorFloor, DefaultUFactorMaximum
         );
         if (uFactor > 0.0)
             fac = uFactor;
@@ -4193,6 +4204,10 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 }
 
 } // anonymous namespace
+
+double MertensHurstDefaultNuRatio() {
+    return DefaultNuRatio;
+}
 
 Int64 MertensHurst(UInt128 n, bool profile, UInt64 segmentCap,
                    UInt64 uOverride, double uFactor, double nuRatio) {

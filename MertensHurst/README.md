@@ -94,6 +94,15 @@ segment covers three times the original-coordinate span of P1. A failed
 runtime Q210 guard still activates the full-M backend with the P1 scheduler
 domain. The stricter P6 scheduler reach is enforced only when P6 is active.
 
+The selector also chooses the tuned default parameters. Explicit `--u`,
+`--u-factor`, and `--nu-ratio` values still override them.
+
+| `LOOP2_SIEVE_P` | Default `nuRatio` | Default u-factor |
+|---:|---:|---|
+| 1 | 0.90 | $\operatorname{clamp}(0.55-0.025(\log_{10}n-16),0.30,0.55)$ |
+| 2 | 0.95 | $\operatorname{clamp}(0.70-0.025(\log_{10}n-18),0.30,0.70)$ |
+| 6 | 1.00 | $\operatorname{clamp}(0.75-0.025(\log_{10}n-18),0.30,0.75)$ |
+
 Fixed-parameter measurements on the 32-thread M3 Ultra (`nuRatio=0.9`,
 `u-factor=0.5`, segment cap $4\times10^{11}$) gave:
 
@@ -160,15 +169,15 @@ Both `DIVISION_FREE` and `BUCKET_SIEVE` produce identical numerical results. The
 ./build/mertens <n> [options]
 ```
 
-where `n` is an integer with $10^8 \le n \le 10^{26}$, in plain decimal or scientific notation (`1e22`, `2.5e21`). The selected split must also satisfy $\lfloor\text{nuRatio}\sqrt n\rfloor > 13860$; with the default ratio 0.9 this requires approximately $n \ge 2.372 \times 10^8$.
+where `n` is an integer with $10^8 \le n \le 10^{26}$, in plain decimal or scientific notation (`1e22`, `2.5e21`). The selected split must also satisfy $\lfloor\text{nuRatio}\sqrt n\rfloor > 13860$; the default threshold is approximately $2.372\times10^8$ for P1, $2.129\times10^8$ for P2, and $1.921\times10^8$ for P6.
 
 Options:
 
 - `--profile` (or `-p`): print a timing breakdown by computation phase, along with the parameter values used.
 - `--segment-cap <len>`: cap on stored sieve entries in the large-segment phase (default: 12000000000, about 12 GB — plus compressed-prefix state). The P1, packed-P2, and packed-P6 Loop 2 sieves cover one, two, and three original integers per stored entry, respectively. Larger caps mean fewer sieve passes but more memory; the value is rounded up to a multiple of the stencil period (13860). Raise it for very large inputs (the $10^{25}$ record run used $4 \times 10^{11}$) if you have the RAM; budget the full memory model in `INPUT_BOUNDS.md` before a $10^{26}$ run.
 - `--u <value>`: set the sieve truncation point $u$ directly, bypassing the default formula. Must satisfy $0 < u < n$. Hard caps are enforced at runtime per build: P1/P2 permit $u \le 2.05 \times 10^{17}$ with the bucket scheduler, while active P6 permits $u \le 115{,}571{,}495{,}477{,}370{,}241$; all modes require $u \lesssim 1.8 \times 10^{19}$ from UInt32 primes and byte encoding. On `DIVISION_FREE=1` builds also keep $u < 2^{60} - 2^{32}$ (see `INPUT_BOUNDS.md` constraints 3-5). Larger $u$ shifts work from S1/S2 summation into sieving; smaller $u$ does the opposite.
-- `--u-factor <value>`: override the scaling factor in the $u$ formula: $u = \lceil \text{factor} \cdot (n / \ln \ln n)^{2/3} \rceil$. Must be positive. The default factor is $\max(0.30, \min(0.55, 0.55 - 0.025(\log_{10} n - 16)))$: $0.55$ through $10^{16}$, decreasing by $0.025$ per decade to $0.30$ at $10^{26}$. Mutually exclusive with `--u`.
-- `--nu-ratio <value>`: S1/S2 split ratio (default: $0.9$). Controls the boundary between the S1 (Mertens sum) and S2 (Möbius sum) ranges via $\nu(x) = \lfloor \text{ratio} \cdot \sqrt{x} \rfloor$. Must be positive. Affects only performance, not correctness.
+- `--u-factor <value>`: override the scaling factor in the $u$ formula: $u = \lceil \text{factor} \cdot (n / \ln \ln n)^{2/3} \rceil$. Must be positive. Without an override, the compiled P1/P2/P6 mode uses the corresponding formula in the table above. Mutually exclusive with `--u`.
+- `--nu-ratio <value>`: override the S1/S2 split ratio. Without an override, P1/P2/P6 uses $0.90/0.95/1.00$, respectively. Controls the boundary between the S1 (Mertens sum) and S2 (Möbius sum) ranges via $\nu(x) = \lfloor \text{ratio} \cdot \sqrt{x} \rfloor$. Must be positive. Affects only performance, not correctness.
 
 Examples:
 
@@ -191,7 +200,7 @@ To use as a library in your own code:
 ```cpp
 #include "MertensHurst.h"
 
-Int64 result = MertensHurst(n);                          // default split: 2.372e8 <= n <= 1e26
+Int64 result = MertensHurst(n);                          // compiled-mode defaults: see table above
 Int64 result = MertensHurst(n, true);                    // with profiling output
 Int64 result = MertensHurst(n, false, 50000000000ULL);   // custom Loop 2 segment cap
 Int64 result = MertensHurst(n, false, 12000000000ULL,

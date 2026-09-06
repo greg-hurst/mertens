@@ -2,7 +2,7 @@
 
 This document catalogs the constraints that limit the supported input `UInt128 n`. It aims to be exhaustive, but there may be additional constraints not yet identified. Each entry notes which source file(s) the constraint originates from, what kind of limit it is, and what would need to change to relax it.
 
-The sections are ordered by the approximate magnitude at which a constraint first becomes relevant. Unless a section says otherwise, conversions from a bound on $u$ to a bound on $n$ use the current default
+The sections are ordered by the approximate magnitude at which a constraint first becomes relevant. Unless a section says otherwise, quoted conversions from a bound on $u$ to a bound on $n$ use the P1 default
 
 $$
 u(n)=\left\lceil f(n)\left(\sqrt[3]{\frac{n}{\log\log n}}\right)^2\right\rceil,
@@ -10,7 +10,11 @@ u(n)=\left\lceil f(n)\left(\sqrt[3]{\frac{n}{\log\log n}}\right)^2\right\rceil,
 f(n)=\operatorname{clamp}\bigl(0.55-0.025(\log_{10}n-16),0.30,0.55\bigr),
 $$
 
-and `nuRatio == 0.9`. The resulting $n$ thresholds are approximate and their last digits may depend on the platform's floating-point library.
+and `nuRatio == 0.9`. P2 instead uses
+$f(n)=\operatorname{clamp}(0.70-0.025(\log_{10}n-18),0.30,0.70)$
+with `nuRatio == 0.95`; P6 uses
+$f(n)=\operatorname{clamp}(0.75-0.025(\log_{10}n-18),0.30,0.75)$
+with `nuRatio == 1.0`. The resulting $n$ thresholds are approximate and their last digits may depend on the platform's floating-point library.
 
 The imposed absolute bounds are $10^8 \le n \le 10^{26}$. Correctness has been verified by completed computations through $10^{25}$; $10^{26}$ is accepted after the runtime and structural checks below but remains unverified until that computation is completed independently.
 
@@ -18,7 +22,9 @@ The imposed absolute bounds are $10^8 \le n \le 10^{26}$. Correctness has been v
 
 | Approximate $n$ | Event | Kind |
 |---:|---|---|
-| $2.372\times10^8$ | Default split first clears one stencil period | Parameter-dependent lower bound |
+| $1.921\times10^8$ | P6 default split first clears one stencil period | Parameter-dependent lower bound |
+| $2.129\times10^8$ | P2 default split first clears one stencil period | Parameter-dependent lower bound |
+| $2.372\times10^8$ | P1 default split first clears one stencil period | Parameter-dependent lower bound |
 | $2^{64}\approx1.845\times10^{19}$ | Legacy all-Q2 S1 bound narrowing ceases to be generally safe | Profile-specific hard bound |
 | $10^{25}$ | Largest completed and independently checked computation | Validation frontier |
 | $10^{26}$ | Current imposed cap; accepted but not yet independently verified | Software frontier |
@@ -45,7 +51,7 @@ The table is a guide, not a substitute for the detailed conditions below. In par
 
 The minimum viable sieve segment size is `B == BF == STENCIL_PERIOD == 13860`, and the main sieve loop requires `B < nu_max`. The implementation reduces its initial segment to the largest stencil multiple below `nu_max` and rejects the configuration if `nu_max <= BF`; it no longer continues with an empty main loop.
 
-The implementation evaluates `floor(0.9*floor(sqrt(n)))` by default, so this requires approximately $n \ge 2.372 \times 10^8$. Inputs between the absolute $10^8$ floor and this default threshold require a larger explicit `nuRatio`.
+P1 evaluates `floor(0.9*floor(sqrt(n)))` by default, so this requires approximately $n \ge 2.372 \times 10^8$. The corresponding default thresholds are approximately $2.129\times10^8$ for P2 at `nuRatio == 0.95` and $1.921\times10^8$ for P6 at `nuRatio == 1.0`. Inputs between the absolute $10^8$ floor and the active mode's threshold require a larger explicit `nuRatio`.
 
 More generally, if the split is changed to `nu_max = c*sqrt(n)`, then this structural threshold becomes roughly $(13860/c)^2$. Decreasing the split constant therefore raises the parameter-dependent lower input bound.
 
@@ -92,7 +98,7 @@ $$
 \left\lfloor\frac{n}{u}\right\rfloor < 2^{32}-1
 $$
 
-before narrowing. Under the current default formula, the first failure occurs at approximately **$n=1.27492819\times10^{26}$**, making this the first structural ceiling beyond the imposed $10^{26}$ cap.
+before narrowing. Under the P1 default formula, the first failure occurs at approximately **$n=1.27492819\times10^{26}$**, making this the first structural ceiling beyond the imposed $10^{26}$ cap.
 
 At $n=10^{26}$, the current floating-point formula gives $u\approx2.52632\times10^{16}$, $\lfloor n/u\rfloor=3\,958\,326\,568$, and exactly $2\,406\,374\,010$ square-free outer entries. The minimum outer-safe $u$ is about $2.32831\times10^{16}$, so the default has only about 8.5% headroom. The square-free count already exceeds `Int32`, which is why these counters are unsigned.
 
@@ -121,7 +127,7 @@ Ignoring all other constraints, combining the largest legal $u$ for several siev
 | Buckets off, division-free on | $4.95\times10^{27}$ |
 | Buckets and division-free off, `UInt32` primes | $7.92\times10^{28}$ |
 
-The current default formula reaches the outer bound much earlier than these best-case combinations.
+The P1 default formula reaches the outer bound much earlier than these best-case combinations.
 
 ---
 
@@ -196,7 +202,7 @@ $$
 u<2^{60}-2^{32}=1\,152\,921\,500\,311\,879\,680.
 $$
 
-The largest inclusive $u$ is therefore $(2^{60}-2^{32})-1$. Inverting the default formula gives approximately **$n=3.15\times10^{28}$**. The sieve enforces this with an unconditional runtime abort, and `MertensHurst` folds the same bound into its build-aware cap.
+The largest inclusive $u$ is therefore $(2^{60}-2^{32})-1$. Inverting the P1 default formula gives approximately **$n=3.15\times10^{28}$**. The sieve enforces this with an unconditional runtime abort, and `MertensHurst` folds the same bound into its build-aware cap.
 
 The bucket-scheduler cap binds first when buckets are enabled. Build with `DIVISION_FREE=0` to remove this particular domain constraint; this is the default on ARM.
 
@@ -279,7 +285,7 @@ $$
 u\le(2^{32}-1)^2=18\,446\,744\,065\,119\,617\,025,
 $$
 
-which also keeps $u<2^{64}$. Under the default formula this is reached at approximately **$n=2.05\times10^{30}$**.
+which also keeps $u<2^{64}$. Under the P1 default formula this is reached at approximately **$n=2.05\times10^{30}$**.
 
 Relaxing this is a coordinated redesign: widen the prime representation, widen sieve coordinates and APIs beyond `UInt64`, redesign the byte encoding, and audit every endpoint expression such as `L1 + B - 1` for overflow or saturation. Near the present theoretical cap there is not enough `UInt64` headroom to assume that a large segment length can always be added before taking a minimum.
 
