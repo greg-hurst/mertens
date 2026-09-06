@@ -64,6 +64,7 @@ DEMOS = $(BUILDDIR)/demo_mobius_core \
         $(BUILDDIR)/demo_mobius_segmented \
         $(BUILDDIR)/demo_mobius_values \
         $(BUILDDIR)/demo_mertens_core \
+        $(BUILDDIR)/demo_odd_mertens_core \
         $(BUILDDIR)/demo_mertens_segmented \
         $(BUILDDIR)/demo_mertens_value \
         $(BUILDDIR)/demo_mertens_values
