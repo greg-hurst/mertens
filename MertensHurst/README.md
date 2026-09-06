@@ -82,11 +82,15 @@ $$M(x)=M_6(x)-M_6(\lfloor x/2\rfloor)-M_6(\lfloor x/3\rfloor)
 M_6(x)=\sum_{\substack{k\le x\\(k,6)=1}}\mu(k),$$
 
 with a native packed coprime-to-6 sieve. Its M6 stream starts at one with
-zero carry. Each Q210 row computes one denominator interval from the original
-unscaled numerator and applies the four signed M6 visits to the existing row
-accumulator when their prefix arguments enter the live segment. There is no
-full-M bridge or retained M6 prefix history. At the same stored-entry cap, a
-P6 segment covers three times the original-coordinate span of P1. A failed
+zero carry. Each Q210 row keeps one common ownership domain from the original
+unscaled numerator and clips up to four scaled live bands inside it. Wide rows
+partition the union of those bands and visit each denominator once, deriving
+the exact $q/2$, $q/3$, and $q/6$ arguments from one $q=\lfloor y/d\rfloor$.
+Narrow rows retain the faster cache-friendly four-stream traversal. The Q210
+quotient stepper remains a compile-time width of eight; full narrow fusion and
+a width of sixteen were both slower in local measurements. There is no full-M
+bridge or retained M6 prefix history. At the same stored-entry cap, a P6
+segment covers three times the original-coordinate span of P1. A failed
 runtime Q210 guard still activates the full-M backend with the P1 scheduler
 domain. The stricter P6 scheduler reach is enforced only when P6 is active.
 

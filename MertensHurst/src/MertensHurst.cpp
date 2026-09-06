@@ -3801,12 +3801,19 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 ++workIndex) {
                 if (workIndex < q6WideCount) {
                     const UInt128 y = q6PartialArgs128[workIndex];
+                    const Int128 fused =
+                        evaluateS1OuterQ210Coprime6FusedWithLookup(
+                            y, q6PartialArgsDivU[workIndex],
+                            q6CommonKappa[workIndex],
+                            coprime6L1, coprime6L2,
+                            getCoprime6Mertens, qCache, dCAP
+                        );
+#if MERTENSHURST_LOOP2_SIEVE_VALIDATE
                     const auto values = evaluateStreams(
                         y, q6PartialArgsDivU[workIndex],
                         q6CommonKappa[workIndex],
                         getCoprime6Mertens
                     );
-#if MERTENSHURST_LOOP2_SIEVE_VALIDATE
                     const auto referenceValues = evaluateStreams(
                         y, q6PartialArgsDivU[workIndex],
                         q6CommonKappa[workIndex],
@@ -3814,10 +3821,12 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                     );
                     for (UInt32 stream = 0; stream < 4; ++stream)
                         assert(values[stream] == referenceValues[stream]);
+                    const Int128 transparent =
+                        -Int128(values[0]) + Int128(values[1])
+                        + Int128(values[2]) - Int128(values[3]);
+                    assert(fused == transparent);
 #endif
-                    q6CompactValues128[workIndex]
-                        += -values[0] + values[1]
-                         + values[2] - values[3];
+                    q6CompactValues128[workIndex] += fused;
                 } else {
                     const UInt64 y = q6PartialArgs[workIndex];
                     const auto values = evaluateStreams(
@@ -3826,6 +3835,13 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                         getCoprime6Mertens
                     );
 #if MERTENSHURST_LOOP2_SIEVE_VALIDATE
+                    const Int128 fused =
+                        evaluateS1OuterQ210Coprime6FusedWithLookup(
+                            y, q6PartialArgsDivU[workIndex],
+                            q6CommonKappa[workIndex],
+                            coprime6L1, coprime6L2,
+                            getCoprime6Mertens, qCache, dCAP
+                        );
                     const auto referenceValues = evaluateStreams(
                         y, q6PartialArgsDivU[workIndex],
                         q6CommonKappa[workIndex],
@@ -3833,6 +3849,10 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                     );
                     for (UInt32 stream = 0; stream < 4; ++stream)
                         assert(values[stream] == referenceValues[stream]);
+                    const Int128 transparent =
+                        -Int128(values[0]) + Int128(values[1])
+                        + Int128(values[2]) - Int128(values[3]);
+                    assert(fused == transparent);
 #endif
                     const UInt64 narrowIndex = workIndex - q6WideCount;
                     const Int128 updated =
@@ -4106,6 +4126,9 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             std::cout << "  packed stride: "
                       << SegmentedCoprime6MertensSieveCore::STRIDE
                       << std::endl;
+            std::cout << "  wide S1 fusion: active" << std::endl;
+            std::cout << "  Q210 stepper lanes: "
+                      << S1Q210Detail::StepperLanes << std::endl;
         }
 #else
         std::cout << "Active Loop 2 sieve P: 1" << std::endl;
@@ -4144,7 +4167,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
             if (useCoprime6Loop2) {
                 std::cout << "       M6 sieve: " << coprime6SieveTime
                           << std::endl;
-                std::cout << "  Four-stream S1: " << coprime6S1Time
+                std::cout << "   Selective S1: " << coprime6S1Time
                           << std::endl;
                 std::cout << "       M6 setup: " << coprime6SetupTime
                           << " (outside phase total)" << std::endl;
