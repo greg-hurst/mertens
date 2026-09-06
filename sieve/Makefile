@@ -57,9 +57,10 @@ endif
 
 DEMODIR  = demo
 BUILDDIR = build
-SRC      = SegmentedMobiusSieve.cpp
+SRC      = SegmentedMobiusSieve.cpp SegmentedOddMobiusSieve.cpp
 
 DEMOS = $(BUILDDIR)/demo_mobius_core \
+        $(BUILDDIR)/demo_odd_mobius_core \
         $(BUILDDIR)/demo_mobius_segmented \
         $(BUILDDIR)/demo_mobius_values \
         $(BUILDDIR)/demo_mertens_core \
