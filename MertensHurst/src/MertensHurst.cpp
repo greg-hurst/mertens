@@ -3269,7 +3269,16 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         // stream.  The odd sieve intentionally restarts at T below.
         if (L1 <= bridgeHi) {
             const UInt64 bridgeSpan = bridgeHi - L1 + 1;
-            const UInt64 bridgeSegmentSize = std::min(B, bridgeSpan);
+            // Keep the transient full-width allocation below the packed odd
+            // allocation that follows it. Some allocators retain freed pages,
+            // so using the full Loop 2 cap here would inflate peak RSS even
+            // though the vectors are explicitly released below.
+            const UInt64 bridgeSegmentCap = BF * std::max<UInt64>(
+                1, B / (4 * BF)
+            );
+            const UInt64 bridgeSegmentSize = std::min(
+                bridgeSegmentCap, bridgeSpan
+            );
             M32.resize(coarseLength(bridgeSegmentSize));
             mSieve.mobiusSieve().fillFromStencil(bridgeSegmentSize);
             MP = M32.data();
