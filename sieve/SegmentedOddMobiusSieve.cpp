@@ -730,8 +730,62 @@ SegmentedOddMobiusSieveCore::LargePrimeHitScheduler::LargePrimeHitScheduler(
     , mBuckets(buckets)
     , mCache(cache)
 {
+#if SIEVE_NARROW_ENTRY
+    // Use one entry format for the whole worker interval. Plain entries retain
+    // the original supported reach when a double jump or the tag does not fit.
+    mSkip9 = mPInd0 < mPInd1
+        && UInt64(mPrimes[mPInd0]) > M2 && mPrimes[mPInd0] > 3
+        && mPrimes[mPInd1 - 1] <= LP_PRIME_MASK
+        && UInt64(mPrimes[mPInd1 - 1]) <= schedulerReach() / 2;
+#endif
+#if SIEVE_NARROW_ENTRY && SIEVE_ODD_ACTIVE_RING
+    UInt64 activeSize = 2;
+    if (mPInd0 < mPInd1) {
+        UInt64 maxJump = mPrimes[mPInd1 - 1];
+        if (mSkip9) maxJump *= 2;
+        while (activeSize < LP_SIZE && maxJump > (activeSize - 1) * M2)
+            activeSize *= 2;
+        assert(maxJump <= (activeSize - 1) * M2);
+    }
+    mActiveMask = activeSize - 1;
+
+    // Discard pending entries before changing the ring. Resizing here also
+    // releases retained allocations in slots that become inactive.
+    for (auto& bucket : mBuckets) bucket.clear();
+    mBuckets.resize(activeSize);
+#else
     if (mBuckets.size() < LP_NBUCKETS) mBuckets.resize(LP_NBUCKETS);
     for (auto& bucket : mBuckets) bucket.clear();
+#endif
+
+#if SIEVE_NARROW_ENTRY
+    // The stencil marks multiples of 9 squareful, so omitting their
+    // log additions leaves finalized mu values and odd prefixes unchanged.
+    if (mSkip9) {
+        const __uint128_t lastOdd = static_cast<__uint128_t>(mFirstOdd)
+                                  + 2 * static_cast<__uint128_t>(mPackedCount - 1);
+        for (UInt32 i = mPInd0; i < mPInd1; ++i) {
+            const UInt32 p = mPrimes[i];
+            UInt64 q;
+            if constexpr (UseDivisionFree)
+                q = mCache->ceilDiv(mFirstOdd, i, p);
+            else
+                q = (mFirstOdd - 1) / p + 1;
+            q += (q & 1) ^ 1;
+
+            // Retained odd cofactor residues are 1,3,5,7,11,13,15,17 mod 18.
+            UInt32 residue = static_cast<UInt32>(q % 18);
+            if (residue == 9) { q += 2; residue = 11; }
+            const __uint128_t hit = static_cast<__uint128_t>(p) * q;
+            if (hit > lastOdd) continue;
+
+            const UInt64 off = static_cast<UInt64>((hit - mFirstOdd) / 2);
+            const UInt32 phase = (residue >> 1) - static_cast<UInt32>(residue > 9);
+            bucketPush(off / M2, p | (phase << 29));
+        }
+        return;
+    }
+#endif
 
     for (UInt32 i = mPInd0; i < mPInd1; ++i) {
         const UInt64 p = mPrimes[i];
@@ -748,25 +802,29 @@ UInt64 SegmentedOddMobiusSieveCore::LargePrimeHitScheduler::subSegFirstOdd(
 }
 
 UInt64 SegmentedOddMobiusSieveCore::LargePrimeHitScheduler::ringIndex(
-    UInt64 subSeg, EntryT entry) noexcept {
+    UInt64 subSeg, EntryT entry) const noexcept {
 #if ODD_SIEVE_SUBS_ACTIVE
     return (subSeg & (LP_SIZE - 1)) * LP_SUBS
          + ((entry & LP_OFF_MASK) >> LP_SUB_SHIFT);
 #else
     (void)entry;
+#if SIEVE_NARROW_ENTRY && SIEVE_ODD_ACTIVE_RING
+    return subSeg & mActiveMask;
+#else
     return subSeg & (LP_SIZE - 1);
+#endif
 #endif
 }
 
 bool SegmentedOddMobiusSieveCore::LargePrimeHitScheduler::emptySubSegment(
     UInt64 subSeg) const noexcept {
 #if ODD_SIEVE_SUBS_ACTIVE
-    const UInt64 begin = (subSeg & (LP_SIZE - 1)) * LP_SUBS;
+    const UInt64 begin = ringIndex(subSeg, 0);
     for (UInt64 i = 0; i < LP_SUBS; ++i)
         if (!mBuckets[begin + i].empty()) return false;
     return true;
 #else
-    return mBuckets[subSeg & (LP_SIZE - 1)].empty();
+    return mBuckets[ringIndex(subSeg, 0)].empty();
 #endif
 }
 
@@ -792,6 +850,15 @@ SegmentedOddMobiusSieveCore::LargePrimeHitScheduler::packEntry(
 
 void SegmentedOddMobiusSieveCore::LargePrimeHitScheduler::sieveSubSegment(
     Int8* __restrict muBase) noexcept {
+#if SIEVE_NARROW_ENTRY
+    if (mSkip9) return sieveSubSegmentImpl<true>(muBase);
+    return sieveSubSegmentImpl<false>(muBase);
+}
+
+template<bool Skip9>
+void SegmentedOddMobiusSieveCore::LargePrimeHitScheduler::sieveSubSegmentImpl(
+    Int8* __restrict muBase) noexcept {
+#endif
     if (__builtin_expect(mCurrentSubSegIndex > mFinalSubSegIndex, false)) return;
     if (__builtin_expect(emptySubSegment(mCurrentSubSegIndex), false)) {
         ++mCurrentSubSegIndex;
@@ -799,10 +866,26 @@ void SegmentedOddMobiusSieveCore::LargePrimeHitScheduler::sieveSubSegment(
     }
 
     const UInt64 base = mPackedBase + mCurrentSubSegIndex * M2;
+#if SIEVE_NARROW_ENTRY
+    const UInt64 remaining = mPackedCount - mCurrentSubSegIndex * M2;
+#endif
 #if !SIEVE_NARROW_ENTRY
     const UInt64 lastOff = (mPackedCount - 1) - mFinalSubSegIndex * M2;
 #endif
-    const UInt64 ring0 = (mCurrentSubSegIndex & (LP_SIZE - 1)) * LP_SUBS;
+    const UInt64 ring0 = ringIndex(mCurrentSubSegIndex, 0);
+
+#if SIEVE_NARROW_ENTRY
+#if SIEVE_ODD_ACTIVE_RING
+    const UInt64 mask = mActiveMask;
+#else
+    constexpr UInt64 mask = LP_SIZE - 1;
+#endif
+    // The outer bucket storage stays fixed while individual payloads grow.
+    const auto bucketPush = [buckets = mBuckets.data(), mask](
+        UInt64 subSeg, EntryT entry) {
+        buckets[subSeg & mask].push_back(entry);
+    };
+#endif
 
     for (UInt64 sb = 0; sb < LP_SUBS; ++sb) {
         PVecT& entries = mBuckets[ring0 + sb];
@@ -813,16 +896,23 @@ void SegmentedOddMobiusSieveCore::LargePrimeHitScheduler::sieveSubSegment(
         const UInt64 firstOdd = subSegFirstOdd(mCurrentSubSegIndex);
 #if ODD_SIEVE_NARROW_SUBS_ACTIVE
         for (size_t i = 0; i < n; ++i) {
-            const UInt64 p = entryData[i];
+            const EntryT entry = entryData[i];
+            const UInt32 p = Skip9 ? entry & LP_PRIME_MASK : entry;
+            // Only the cofactor step 7 -> 11 needs a double packed jump.
+            const UInt32 jump = p + static_cast<UInt32>(
+                Skip9 && (entry >> 29) == 3) * p;
+            const EntryT nextEntry = Skip9 ? EntryT(entry + LP_PHASE_TICK) : entry;
             const UInt64 off = SegmentedOddMobiusSieveCore::firstPackedOffset(firstOdd, p);
             const UInt32 hit = static_cast<UInt32>(off)
                 | (static_cast<UInt32>(SegmentedOddMobiusSieveCore::primeLogWeight(
                        static_cast<UInt32>(p))) << LP_OFF_BITS);
             mTransientHits[off >> LP_TRANSIENT_SHIFT].push_back(hit);
 
-            const UInt64 next = mCurrentSubSegIndex * M2 + off + p;
-            if (next < mPackedCount)
-                bucketPush(next / M2, static_cast<EntryT>(p));
+            // The supported reach bounds the local sum below LP_SIZE*M2 <= 2^31.
+            const UInt32 local = static_cast<UInt32>(off) + jump;
+            if (local < remaining)
+                bucketPush(mCurrentSubSegIndex + local / static_cast<UInt32>(M2),
+                           nextEntry);
         }
 
         for (TransientHitVecT& hits : mTransientHits) {
@@ -833,13 +923,18 @@ void SegmentedOddMobiusSieveCore::LargePrimeHitScheduler::sieveSubSegment(
         }
 #else
         for (size_t i = 0; i < n; ++i) {
-            const UInt64 p = entryData[i];
+            const EntryT entry = entryData[i];
+            const UInt32 p = Skip9 ? entry & LP_PRIME_MASK : entry;
+            const UInt32 jump = p + static_cast<UInt32>(
+                Skip9 && (entry >> 29) == 3) * p;
+            const EntryT nextEntry = Skip9 ? EntryT(entry + LP_PHASE_TICK) : entry;
             const UInt64 off = SegmentedOddMobiusSieveCore::firstPackedOffset(firstOdd, p);
             muBase[base + off] += SegmentedOddMobiusSieveCore::primeLogWeight(
                 static_cast<UInt32>(p));
-            const UInt64 next = mCurrentSubSegIndex * M2 + off + p;
-            if (next < mPackedCount)
-                bucketPush(next / M2, static_cast<EntryT>(p));
+            const UInt32 local = static_cast<UInt32>(off) + jump;
+            if (local < remaining)
+                bucketPush(mCurrentSubSegIndex + local / static_cast<UInt32>(M2),
+                           nextEntry);
         }
 #endif
 #else

@@ -143,6 +143,16 @@ private:
         static_assert(LP_SIZE <= LP_S_MASK + 1,
                       "stride field must hold p / M2 for every scheduled prime");
 
+        // Set to 0 to retain the full LP_SIZE ring in the narrow backend.
+#ifndef SIEVE_ODD_ACTIVE_RING
+#define SIEVE_ODD_ACTIVE_RING 1
+#endif
+
+#if SIEVE_NARROW_ENTRY
+        static constexpr UInt32 LP_PRIME_MASK = (UInt32(1) << 29) - 1;
+        static constexpr UInt32 LP_PHASE_TICK = UInt32(1) << 29;
+#endif
+
 #ifndef SIEVE_SUB_BUCKETS
 #define SIEVE_SUB_BUCKETS 1
 #endif
@@ -185,10 +195,14 @@ private:
                                const SieveQuotientCache* cache);
 
         void sieveSubSegment(Int8* muBase) noexcept;
+#if SIEVE_NARROW_ENTRY
+        template<bool Skip9>
+        void sieveSubSegmentImpl(Int8* muBase) noexcept;
+#endif
         UInt64 subSegFirstOdd(UInt64 subSeg) const noexcept;
         bool emptySubSegment(UInt64 subSeg) const noexcept;
         void bucketPush(UInt64 subSeg, EntryT entry) noexcept;
-        static UInt64 ringIndex(UInt64 subSeg, EntryT entry) noexcept;
+        UInt64 ringIndex(UInt64 subSeg, EntryT entry) const noexcept;
         static EntryT packEntry(UInt32 p, UInt64 off) noexcept;
 
         UInt64 mPackedBase;
@@ -200,6 +214,12 @@ private:
         UInt32 mPInd0;
         UInt32 mPInd1;
         std::vector<PVecT>& mBuckets;
+#if SIEVE_NARROW_ENTRY && SIEVE_ODD_ACTIVE_RING
+        UInt64 mActiveMask = LP_SIZE - 1;
+#endif
+#if SIEVE_NARROW_ENTRY
+        bool mSkip9 = false;
+#endif
 #if ODD_SIEVE_NARROW_SUBS_ACTIVE
         std::array<TransientHitVecT, LP_TRANSIENT_SUBS> mTransientHits;
 #endif

@@ -212,6 +212,13 @@ firstOdd = first odd integer >= lo
 data[i]  = mu(firstOdd + 2*i)
 ```
 
+The narrow odd-sieve bucket scheduler sizes its power-of-two ring for the
+primes scheduled in each worker interval. `SIEVE_ODD_ACTIVE_RING=0` retains
+the full `LP_SIZE` ring; range checks use `LP_SIZE` in either build. Phase
+tags omit hits whose odd cofactor is divisible by 9, since those values are
+already squareful. Each worker uses the plain entry format if a prime or
+its double jump would exceed the tagged format's bounds.
+
 The odd Mertens core computes
 $M_2(x)=\sum_{k\le x,\ k\text{ odd}}\mu(k)$ and explicitly supports the
 constant step across even coordinates: $M_2(2k)=M_2(2k-1)$. Its compressed
