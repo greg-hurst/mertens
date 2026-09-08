@@ -527,10 +527,10 @@ static inline Int64 updateMode64(
     return result;
 }
 
-template<CoherentS2Q210::Mode Mode>
+template<CoherentS2Q210::Mode Mode, typename TArg>
 static inline void updateMode128Direct(
     const CoherentS2Q210::DensePeriodTable& table,
-    const UInt128& numerator,
+    const TArg& numerator,
     UInt64 L1,
     UInt64 lo,
     UInt64 hi,
@@ -543,8 +543,13 @@ static inline void updateMode128Direct(
     auto add = [&](UInt64 denominator) {
         const Int8 mu = Mu[denominator - L1];
         if (mu == 0) return;
-        const UInt128 quotient = numerator / denominator;
-        result += Int128(mu) * Evaluator::eval128(table, quotient);
+        if constexpr (std::is_same_v<TArg, UInt64>) {
+            const UInt64 quotient = numerator / denominator;
+            result += Int128(mu) * Evaluator::eval64(table, quotient);
+        } else {
+            const UInt128 quotient = numerator / denominator;
+            result += Int128(mu) * Evaluator::eval128(table, quotient);
+        }
     };
     auto addClippedBlock = [&](UInt64 block) {
         for (UInt64 residue : CoherentS2Q210::Residues) {
@@ -627,9 +632,16 @@ static inline Int128 updateMode128(
     const UInt64 directHi = std::min(
         hi, std::max<UInt64>(predictorBoundary, 210)
     );
-    updateMode128Direct<Mode>(
-        table, numerator, L1, lo, directHi, Mu, result
-    );
+    // Wide row storage does not require wide division for every numerator.
+    if (numerator <= std::numeric_limits<UInt64>::max()) {
+        updateMode128Direct<Mode>(
+            table, static_cast<UInt64>(numerator), L1, lo, directHi, Mu, result
+        );
+    } else {
+        updateMode128Direct<Mode>(
+            table, numerator, L1, lo, directHi, Mu, result
+        );
+    }
     if (directHi == hi) return result;
 
     const UInt64 predictedLo = std::max(lo, directHi + 1);
