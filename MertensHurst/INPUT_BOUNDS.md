@@ -350,3 +350,40 @@ $$
 $$
 
 for which this code supplies no useful fixed input threshold. Before that assumption becomes questionable, add unconditional release-mode checks to both recovery paths or widen the API and its formatter to `Int128`.
+
+---
+
+## 13. Int32 segment capacity and phase memory
+
+**Source:** `src/MertensHurst.cpp`, `../sieve/SegmentedMertensSieve.h`, `../sieve/SegmentedOddMertensSieve.h`
+
+Int16 retains its original small segment size and transition bound. Int32
+capacity is separate: by default it is four times `getSegmentSize(n,u)`,
+clamped to the remaining stencil-aligned Loop 0/1 interval. Active spans grow
+approximately as $\max(B_{16},2L^2/u)$, up to that capacity. A positive
+`--loop01-int32-segment-size` selects fixed spans instead. Alignment and
+endpoint arithmetic are checked before allocation; the final span may be
+shorter. Ordinary-M checkpoints and the odd-prefix seed use the actual final
+endpoint, independently of the number of Int32 segments.
+
+With stride 256, Int32 segment storage is approximately
+$2B_{32}+9\lceil B_{32}/256\rceil$ bytes for Mobius values, residuals, coarse
+samples, and prefix workspace. At $10^{26}$ with the P2 defaults, automatic
+capacity is **2,321,605,440 entries**, about **4.40 GiB** of segment storage.
+The compact outer state is about **39.65 GiB** during Loop 0/1 and **20.60
+GiB** after its temporary arrays are released. Earlier compaction allocations
+have a separate peak and must also be included in a whole-process budget.
+
+Obsolete Int16/Int32 buffers and prefix workspaces are explicitly released
+before the next representation is allocated. At a Loop 2 cap of
+$4\times10^{11}$, the P2 quarter-cap bridge requires about **96.41 GiB** of
+segment storage. After releasing it, the packed-odd representation requires
+about **387.08 GiB**, using $B+10\lceil B/256\rceil$ bytes. Its combined
+segment and retained outer state is therefore about **407.68 GiB**, before
+prime/bucket storage, allocator retention, thread state, and system usage.
+
+These are allocation-model values, not a guarantee of zero memory pressure.
+Bucket vectors retain their peak capacities, and freed allocations may remain
+resident. A 512-GiB machine still needs explicit allowance for those costs
+and background workloads; decreasing Int32 capacity alone does not reduce
+the dominant packed-odd allocation.

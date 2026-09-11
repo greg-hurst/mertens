@@ -256,6 +256,7 @@ static constexpr bool NeedsOuterHash = !UseS1OuterQ6 || UseFullRecovery;
 #include <omp.h>
 #include <stdexcept>
 #include <sys/time.h>
+#include <type_traits>
 #include <vector>
 
 // ============================================================================
@@ -301,7 +302,8 @@ static std::vector<UInt32> sievePrimesUpToSqrt(UInt64 limit) {
 class MertensComputer {
 public:
     Int64 compute(UInt128 n, bool profile, UInt64 segmentCap,
-                  UInt64 uOverride, double uFactor, double nuRatio
+                  UInt64 uOverride, double uFactor, double nuRatio,
+                  UInt64 loop01Int32SegmentSize, UInt32 s1Int32Chunk
 #if MERTENSHURST_Q6_ZERO_COMPLETION_VALIDATE
                   , bool allowZeroCompletion = true
 #endif
@@ -433,7 +435,8 @@ void MertensComputer::initializeBounds(
 // ============================================================================
 
 Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
-                               UInt64 uOverride, double uFactor, double nuRatio
+                               UInt64 uOverride, double uFactor, double nuRatio,
+                               UInt64 loop01Int32SegmentSize, UInt32 s1Int32Chunk
 #if MERTENSHURST_Q6_ZERO_COMPLETION_VALIDATE
                                , bool allowZeroCompletion
 #endif
@@ -463,9 +466,16 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         std::abort();
     }
     mNuRatio = nuRatio;
+    if (s1Int32Chunk == 0
+        || s1Int32Chunk > static_cast<UInt32>(std::numeric_limits<int>::max())) {
+        std::cerr << "Error: Int32 S1 chunk must be in [1, INT_MAX]."
+                  << std::endl;
+        std::abort();
+    }
 
     struct timeval start, end;
     double t[10] = {0.0};
+    double int32SetupTime = 0.0;
 #if MERTENSHURST_LOOP2_SIEVE_P == 2 && MERTENSHURST_Q210_COUPLED
     double oddBridgeSieveTime = 0.0;
     double oddBridgeS1Time = 0.0;
@@ -476,6 +486,18 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 
     constexpr UInt64 BF = SegmentedMobiusSieveCore::STENCIL_PERIOD;
     constexpr UInt64 min_B = BF * ((10000000ULL + BF - 1) / BF);
+    auto alignUp = [](UInt64 length, UInt64 alignment) {
+        const UInt64 remainder = length % alignment;
+        if (remainder == 0) return length;
+        const UInt64 padding = alignment - remainder;
+        if (length > std::numeric_limits<UInt64>::max() - padding) {
+            std::cerr << "Error: Loop 0/1 segment size or endpoint is too large to align."
+                      << std::endl;
+            std::abort();
+        }
+        return length + padding;
+    };
+    const UInt64 requestedB32 = alignUp(loop01Int32SegmentSize, BF);
 
     // Compute u: direct override, factor override, or tuned default
     UInt64 u;
@@ -533,7 +555,14 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     }
     const UInt32 outerCount = static_cast<UInt32>(outerCount128);
     const UInt64 nu = outerCount;
-    UInt64 B = std::min(min_B, getSegmentSize(n, u));
+    const UInt64 naturalSegmentSize = getSegmentSize(n, u);
+    if (naturalSegmentSize > std::numeric_limits<UInt64>::max() / 4) {
+        std::cerr << "Error: automatic Int32 segment capacity is too large."
+                  << std::endl;
+        std::abort();
+    }
+    const UInt64 automaticB32 = alignUp(4 * naturalSegmentSize, BF);
+    UInt64 B = std::min(min_B, naturalSegmentSize);
 
     // Every main-loop configuration needs at least one stencil-aligned
     // segment strictly below nuMax. This matters for ratios below one on
@@ -546,6 +575,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         std::abort();
     }
     B = std::min(B, BF * ((initialNuMax - 1) / BF));
+    const UInt64 B16 = B;
 
     // Round up to stencil alignment
     const UInt64 nuCAP = BF * (nu / BF + 1);
@@ -1266,13 +1296,13 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     constexpr int M_LOG_STRIDE = SegmentedMertensSieveCore::STRIDE_LOG;
     constexpr UInt64 M_STRIDE = UInt64(1) << M_LOG_STRIDE;
     auto coarseLength = [](UInt64 length) {
-        return (length + M_STRIDE - 1) >> M_LOG_STRIDE;
+        return (length >> M_LOG_STRIDE) + ((length & (M_STRIDE - 1)) != 0);
     };
 
     std::vector<Int16> M16(coarseLength(B), 0);
     Int16 M16Prev = 0;
 
-    std::vector<Int32> M32(coarseLength(B), 0);
+    std::vector<Int32> M32;
     Int32 MPrev = 0;
 
     std::vector<Int8> R(B, 0);
@@ -1284,13 +1314,30 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     Int8*  MuP  = mSieve.mobiusSieve().data();
 
     UInt64 L1 = 1;
-    UInt64 L2 = B;
+    UInt64 L2 = 0;
+
+    // |M(n)| < 32768 for n < 7,613,644,886. Keep the Int16 phase's
+    // existing small segments and safety margin when Int32 segments grow.
+    constexpr UInt64 M16BitMax = UInt64(0.97 * 7613644886ULL);
+    const UInt64 loop0End = alignUp(std::min(nuMax, M16BitMax), B16);
+    const UInt64 loop01End = loop0End >= nuMax
+        ? loop0End : alignUp(nuMax, BF);
+    if (loop01End == std::numeric_limits<UInt64>::max()) {
+        std::cerr << "Error: Loop 0/1 endpoint leaves no room for the next segment."
+                  << std::endl;
+        std::abort();
+    }
+    const UInt64 B32 = std::min(
+        requestedB32 != 0 ? requestedB32 : automaticB32,
+        loop01End - loop0End
+    );
+    const UInt64 loop0Segments = loop0End / B16;
+    UInt64 loop1Segments = 0;
 
     // The odd-only Loop 2 phase needs M_2(T - 1), where T is the first
-    // integer after the complete Loop 0/1 segment containing nuMax.  Record
-    // the O(log T) ordinary-Mertens checkpoints needed by
+    // integer after the final active Loop 0/1 span. Record the O(log T)
+    // ordinary-Mertens checkpoints needed by
     // M_2(z) = sum_j M(floor(z / 2^j)) while those segments are live.
-    const UInt64 loop01End = B * (nuMax / B + (nuMax % B != 0));
 #if MERTENSHURST_LOOP2_SIEVE_P == 2
     const UInt64 oddLoop2Seam = loop01End + 1;
 #endif
@@ -1313,8 +1360,9 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     UInt64 osqrt = nusVec[j];
     Int64 coherentBoundaryIndex = static_cast<Int64>(q6CommonNu.size()) - 1;
 
-    // S2 work gets split into CHUNK_LEN-sized chunks for OpenMP.
-    // needs to be > cbrt(n) so chunks stay in the quotient predictor range.
+    // CHUNK_LEN classifies large S2 rows and sets the legacy task size.
+    // Keep it above cbrt(n) for the retained predictor dispatch. Compact
+    // Int32 rows can use smaller tasks, with exact initialization per task.
     std::vector<Chunk> chunks;
     UInt64 CHUNK_LEN = BF * (static_cast<UInt64>(4.0 * std::cbrt((double)n)) / BF + 1);
     UInt32 mx0 = 1, mx1 = mx;
@@ -1332,6 +1380,16 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                               , bool loop2
 #endif
                               ) {
+        using MIntT = std::remove_cv_t<
+            std::remove_pointer_t<decltype(mertensCoarse)>
+        >;
+        const int s1Chunk = std::is_same_v<MIntT, Int32>
+#if MERTENSHURST_Q30_COUPLED
+            && !loop2
+#else
+            && segmentHi <= loop01End
+#endif
+            ? static_cast<int>(s1Int32Chunk) : 1;
         if constexpr (UseS1OuterQ6) {
 #if MERTENSHURST_S1_Q30030_LADDER
             if constexpr (UseS1Q30030Ladder) {
@@ -1498,16 +1556,13 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                             }
                         }
                     };
-                    using MIntT = std::remove_cv_t<
-                        std::remove_pointer_t<decltype(mertensCoarse)>
-                    >;
                     auto p13Active = [&](UInt64 rootIndex) {
                         if constexpr (std::is_same_v<MIntT, Int16>)
                             return true;
                         return rootIndex >= q6WideCount;
                     };
 
-                    #pragma omp parallel for schedule(dynamic, 1)
+                    #pragma omp parallel for schedule(dynamic, s1Chunk)
                     for (UInt64 workIndex = 0;
                          workIndex < s1Q6Worklist.size();
                          ++workIndex) {
@@ -1770,7 +1825,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 }
             }
 #endif
-            #pragma omp parallel for schedule(dynamic, 1)
+            #pragma omp parallel for schedule(dynamic, s1Chunk)
             for (UInt64 workIndex = 0; workIndex < s1Q6Worklist.size(); ++workIndex) {
                 const S1Q6WorkItem& item = s1Q6Worklist[workIndex];
                 const UInt32 index = item.compactIndex;
@@ -2930,12 +2985,37 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 
     auto doLoop01Iteration = [&](auto& _MP,
                                    auto& _MPrev,
-                                   const UInt64 bound,
+                                   const UInt64 capacity,
+                                   const UInt64 phaseEnd,
                                    const int prof_base) {
-        while (L2 < bound) {
+        const UInt64 compactTaskLength = prof_base == 3
+            ? std::min(CHUNK_LEN, B16) : CHUNK_LEN;
+        while (L1 <= phaseEnd) {
             // ------------ Sieve Step ------------
             START_PROFILE();
-            L2 = L1 + B - 1;
+            UInt64 activeCapacity = capacity;
+            if (prof_base == 3) {
+                ++loop1Segments;
+                if (loop01Int32SegmentSize == 0) {
+                    // Typical rows visit about u*B/L1^2 denominators. Keep
+                    // dense early segments small, then grow as visits thin.
+                    const UInt128 square = UInt128(L1) * L1;
+                    const UInt128 capProduct = UInt128(capacity) * u;
+                    const UInt128 saturationPoint = (capProduct >> 1)
+                        + (capProduct & 1);
+                    UInt64 densityLength = capacity;
+                    // Compare before doubling square, which could overflow.
+                    if (square < saturationPoint)
+                        densityLength = static_cast<UInt64>(2 * square / u);
+                    activeCapacity = std::max(
+                        std::min(capacity, B16), BF * (densityLength / BF)
+                    );
+                }
+            }
+            const UInt64 activeLength = std::min(
+                activeCapacity, phaseEnd - L1 + 1
+            );
+            L2 = L1 + activeLength - 1;
             mSieve.sieve(L1, L2, _MPrev, _MP, RP, primes);
             _MPrev = GET_M(_MP, RP, L1, L2);
             if constexpr (UseOddLoop2) {
@@ -2980,12 +3060,15 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                             L2, q6CommonNu[workIndex]
                         );
                         for (UInt64 lo = s2SegmentLo;
-                             lo <= rowEnd;
-                             lo += CHUNK_LEN) {
+                             lo <= rowEnd;) {
+                            const UInt64 taskHi = lo + std::min(
+                                compactTaskLength - 1, rowEnd - lo
+                            );
                             chunks.push_back(Chunk{
-                                static_cast<UInt32>(workIndex), lo,
-                                std::min(lo + CHUNK_LEN - 1, rowEnd)
+                                static_cast<UInt32>(workIndex), lo, taskHi
                             });
+                            if (taskHi == rowEnd) break;
+                            lo = taskHi + 1;
                         }
                     }
                 }
@@ -3149,18 +3232,34 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         }
     };
 
-    // |M(n)| < 128 for all n <= 7,613,644,886, so Int16 is safe for Loop 0.
-    // MFRAC adds a little safety margin.
-#define MFRAC 0.97
-#define M16BITMAX UInt64(MFRAC * 7613644886ULL)
-
-    // Loop 0: sieve [1, min(nuMax, M16BITMAX)] with Int16 M accumulators.
+    // Loop 0: sieve through the Int16 bound with the existing small segments.
     // Both S1 and S2 updates are performed per segment.
-    doLoop01Iteration(M16P, M16Prev, std::min(nuMax, M16BITMAX), 0);
+    doLoop01Iteration(M16P, M16Prev, B16, loop0End, 0);
 
     // Loop 1: continue with Int32 M accumulators up to nuMax.
     MPrev = M16Prev;
-    doLoop01Iteration(MP, MPrev, nuMax, 3);
+    releaseVector(M16);
+    mSieve.releasePrefixWorkspace<Int16>();
+    if (B32 != 0) {
+        START_PROFILE();
+        releaseVector(R);
+        mSieve.mobiusSieve().releaseMemory();
+        mSieve.initialize(B32);
+        M32.resize(coarseLength(B32));
+        R.resize(B32);
+        MP = M32.data();
+        RP = R.data();
+        MuP = mSieve.mobiusSieve().data();
+        END_PROFILE(int32SetupTime);
+        t[3] += int32SetupTime;
+        doLoop01Iteration(MP, MPrev, B32, loop01End, 3);
+    }
+
+    if (L1 != loop01End + 1 || L2 != loop01End) {
+        std::cerr << "Internal error: incomplete Loop 0/1 span."
+                  << std::endl;
+        std::abort();
+    }
 
 #if MERTENSHURST_LOOP2_SIEVE_P == 2
     Int32 oddMertensPrev = 0;
@@ -3193,14 +3292,15 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
     }
 #endif
 
-#undef M16BITMAX
-#undef MFRAC
-
     releaseVector(nusVec);
     releaseVector(s2SplitCache);
     releaseVector(chunks);
     releaseVector(R);
-    releaseVector(M16);
+    // The next phase can need less storage than a large Int32 segment.
+    // Drop its capacities and both prefix workspaces before reallocating.
+    mSieve.releasePrefixWorkspace<Int32>();
+    mSieve.mobiusSieve().releaseMemory();
+    releaseVector(M32);
 #if MERTENSHURST_Q210_COUPLED
     q210PeriodTable.reset();
 #endif
@@ -3303,7 +3403,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
                 bridgeSegmentCap, bridgeSpan
             );
             M32.resize(coarseLength(bridgeSegmentSize));
-            mSieve.mobiusSieve().fillFromStencil(bridgeSegmentSize);
+            mSieve.initialize(bridgeSegmentSize);
             MP = M32.data();
             RP = mSieve.mobiusSieve().data();
 
@@ -3560,7 +3660,7 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
 #endif
     {
         M32.resize(coarseLength(B));
-        mSieve.mobiusSieve().fillFromStencil(B);
+        mSieve.initialize(B);
 
         // R aliases Mu in-place, saving one full Loop 2 segment buffer.
         MP = M32.data();
@@ -3678,6 +3778,29 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         std::cout << "-------------- Parameters -------------------" << std::endl;
         std::cout << "              u: " << u << std::endl;
         std::cout << "        nuRatio: " << mNuRatio << std::endl;
+        std::cout << "            B16: " << B16 << std::endl;
+        std::cout << "  B32 requested: " << loop01Int32SegmentSize
+                  << (loop01Int32SegmentSize == 0 ? " (adaptive)" : " (fixed)")
+                  << std::endl;
+        std::cout << "    B32 aligned: "
+                  << (requestedB32 != 0 ? requestedB32 : automaticB32)
+                  << std::endl;
+        std::cout << "   B32 capacity: " << B32 << std::endl;
+        std::cout << " Int16 segments: " << loop0Segments << std::endl;
+        std::cout << " Int32 segments: " << loop1Segments << std::endl;
+        std::cout << " Int32 S1 chunk: " << s1Int32Chunk << std::endl;
+        if constexpr (UseS1OuterQ6) {
+            std::cout << "S1 worklist rows: " << s1Q6Worklist.size() << std::endl;
+            std::cout << "Int32 row visits: "
+                      << static_cast<long double>(s1Q6Worklist.size())
+                          * loop1Segments
+                      << std::endl;
+        }
+        std::cout << "Int32 segment bytes (approx): "
+                  << 2.0L * B32
+                      + static_cast<long double>(coarseLength(B32))
+                          * (2 * sizeof(Int32) + sizeof(Int8))
+                  << std::endl;
         if constexpr (UseQ6ZeroCompletion) {
             std::cout << "Q6 zero completion: "
                       << (useQ6ZeroCompletion ? "active" : "retained fallback")
@@ -3766,6 +3889,8 @@ Int64 MertensComputer::compute(UInt128 n, bool profile, UInt64 segmentCap,
         if (t[3] + t[4] + t[5] > 0.0) {
             std::cout << "--------------- Loop 1 32-bit ---------------" << std::endl;
             std::cout << "          Sieve: " << t[3] << ", " << (100.0*t[3]/tot) << "%" << std::endl;
+            std::cout << "    Int32 setup: " << int32SetupTime
+                      << " (included in sieve)" << std::endl;
             std::cout << "             S1: " << t[5] << ", " << (100.0*t[5]/tot) << "%" << std::endl;
             std::cout << "             S2: " << t[4] << ", " << (100.0*t[4]/tot) << "%" << std::endl;
         }
@@ -3813,20 +3938,23 @@ double MertensHurstDefaultNuRatio() {
 }
 
 Int64 MertensHurst(UInt128 n, bool profile, UInt64 segmentCap,
-                   UInt64 uOverride, double uFactor, double nuRatio) {
+                   UInt64 uOverride, double uFactor, double nuRatio,
+                   UInt64 loop01Int32SegmentSize, UInt32 s1Int32Chunk) {
 #if MERTENSHURST_Q6_ZERO_COMPLETION_VALIDATE
     Int64 result;
     {
         MertensComputer computer;
         result = computer.compute(
-            n, profile, segmentCap, uOverride, uFactor, nuRatio
+            n, profile, segmentCap, uOverride, uFactor, nuRatio,
+            loop01Int32SegmentSize, s1Int32Chunk
         );
     }
     Int64 retainedResult;
     {
         MertensComputer computer;
         retainedResult = computer.compute(
-            n, false, segmentCap, uOverride, uFactor, nuRatio, false
+            n, false, segmentCap, uOverride, uFactor, nuRatio,
+            loop01Int32SegmentSize, s1Int32Chunk, false
         );
     }
     if (retainedResult != result) {
@@ -3838,7 +3966,10 @@ Int64 MertensHurst(UInt128 n, bool profile, UInt64 segmentCap,
     return result;
 #else
     MertensComputer computer;
-    return computer.compute(n, profile, segmentCap, uOverride, uFactor, nuRatio);
+    return computer.compute(
+        n, profile, segmentCap, uOverride, uFactor, nuRatio,
+        loop01Int32SegmentSize, s1Int32Chunk
+    );
 #endif
 }
 

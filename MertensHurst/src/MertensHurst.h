@@ -35,8 +35,18 @@
 // nuRatio:    S1/S2 split ratio. get_nu(x) = floor(nuRatio * sqrt(x)).
 //              The compiled default is 0.90 for P1 and 0.95 for P2. Explicit
 //              values must be > 0. Affects performance, not correctness.
+//
+// loop01Int32SegmentSize: maximum entries per Int32 Loop 0/1 segment.
+//              Default 0 grows active spans with 2*L^2/u, up to four times
+//              the natural segment heuristic. Nonzero selects fixed spans.
+//              Rounded up to stencil alignment, then clamped to the remaining
+//              Int32 span. The final active span can be shorter.
+//
+// s1Int32Chunk: OpenMP dynamic chunk for Int32 outer-Q6-family S1 rows
+//              (default 8, valid range 1 through INT_MAX).
 double MertensHurstDefaultNuRatio();
 
 Int64 MertensHurst(UInt128 n, bool profile = false, UInt64 segmentCap = 12000000000ULL,
                    UInt64 uOverride = 0, double uFactor = 0.0,
-                   double nuRatio = MertensHurstDefaultNuRatio());
+                   double nuRatio = MertensHurstDefaultNuRatio(),
+                   UInt64 loop01Int32SegmentSize = 0, UInt32 s1Int32Chunk = 8);

@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <sys/time.h>
 
@@ -62,6 +63,12 @@ static void printUsage(const char* prog) {
     std::cerr << "  --profile, -p        print timing breakdown by computation phase" << std::endl;
     std::cerr << "  --segment-cap <len>  cap on stored Loop 2 sieve entries"
                  " (default: 12000000000, about 12 GB)" << std::endl;
+    std::cerr << "  --loop01-int32-segment-size <len>"
+                 "  fixed Int32 Loop 0/1 entries (0: adaptive sizing)"
+              << std::endl;
+    std::cerr << "  --s1-int32-chunk <rows>"
+                 "  Int32 outer-Q6-family S1 dynamic chunk (default: 8)"
+              << std::endl;
     std::cerr << "  --u <value>          set the sieve truncation point directly" << std::endl;
     std::cerr << "  --u-factor <value>   set the u scaling factor"
                  " (default depends on LOOP2_SIEVE_P)" << std::endl;
@@ -82,6 +89,8 @@ int main(int argc, char* argv[]) {
 
     bool profile = false;
     UInt64 segmentCap = 12000000000ULL;
+    UInt64 loop01Int32SegmentSize = 0;
+    UInt32 s1Int32Chunk = 8;
     UInt64 uOverride = 0;
     double uFactor = 0.0;
     double nuRatio = MertensHurstDefaultNuRatio();
@@ -101,6 +110,33 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
             segmentCap = static_cast<UInt64>(capParsed);
+        } else if (std::strcmp(argv[i], "--loop01-int32-segment-size") == 0) {
+            if (i + 1 >= argc) {
+                std::cerr << "Error: --loop01-int32-segment-size requires a value."
+                          << std::endl;
+                return 1;
+            }
+            UInt128 sizeParsed;
+            if (!parseNumber(argv[++i], sizeParsed) || (sizeParsed >> 64) != 0) {
+                std::cerr << "Error: --loop01-int32-segment-size must be a nonnegative integer."
+                          << std::endl;
+                return 1;
+            }
+            loop01Int32SegmentSize = static_cast<UInt64>(sizeParsed);
+        } else if (std::strcmp(argv[i], "--s1-int32-chunk") == 0) {
+            if (i + 1 >= argc) {
+                std::cerr << "Error: --s1-int32-chunk requires a value."
+                          << std::endl;
+                return 1;
+            }
+            UInt128 chunkParsed;
+            if (!parseNumber(argv[++i], chunkParsed) || chunkParsed == 0
+                || chunkParsed > UInt128(std::numeric_limits<int>::max())) {
+                std::cerr << "Error: --s1-int32-chunk must be an integer in [1, INT_MAX]."
+                          << std::endl;
+                return 1;
+            }
+            s1Int32Chunk = static_cast<UInt32>(chunkParsed);
         } else if (std::strcmp(argv[i], "--u") == 0) {
             if (i + 1 >= argc) {
                 std::cerr << "Error: --u requires a value." << std::endl;
@@ -160,7 +196,10 @@ int main(int argc, char* argv[]) {
 
     struct timeval start, end;
     gettimeofday(&start, NULL);
-    Int64 result = MertensHurst(n, profile, segmentCap, uOverride, uFactor, nuRatio);
+    Int64 result = MertensHurst(
+        n, profile, segmentCap, uOverride, uFactor, nuRatio,
+        loop01Int32SegmentSize, s1Int32Chunk
+    );
     gettimeofday(&end, NULL);
 
     double t = (Int64)(end.tv_sec) - (Int64)(start.tv_sec)

@@ -50,7 +50,7 @@ falls back to Q=30. It never mixes Q=30 and Q=210 rows.
 
 The `q210-coupled` profile also groups eligible $S_1$ rows through 11 and 13.
 It uses $Q=2310$ and $Q=30030$ parent kernels with exact $Q=210$ seams, while
-preserving the original dynamic-per-row scheduler. Loop 2 stays native;
+using separate dynamic chunks for Int32 S1 rows. Loop 2 stays native;
 wide Loop-1 roots use only the profitable factor-11 pairing. Two membership
 masks and two monotone child maps are temporary and released before Loop 2
 (about 249 MB at $10^{25}$). The Q=210 coefficient table occupies about
@@ -68,8 +68,9 @@ and sieves $M_2$ natively in packed odd coordinates. The two signed terms are
 applied at their respective segment visits to the same existing S1 row and
 accumulator. A short full-M bridge handles the phase seam exactly; Loop 0/1,
 S2, unordered S2, recovery, and the factor-11/factor-13 ladder are unchanged.
-The bridge uses smaller temporary chunks so allocator-retained bridge pages do
-not overlap a second full-size allocation. The main odd phase still consumes
+The bridge uses smaller temporary chunks to limit its memory cost, and its
+buffers are released before the full-size odd allocation. Freed pages may
+remain resident. The main odd phase still consumes
 the full stored-entry budget. A P2 binary whose runtime Q210 guard fails uses
 the full-$M$ backend with the configured P2 parameters. The historical `q210-coupled-odd-loop2`
 targets and binary paths remain aliases for compatibility.
@@ -81,6 +82,14 @@ The selector also chooses the tuned default parameters. Explicit `--u`,
 |---:|---:|---|
 | 1 | 0.90 | $\operatorname{clamp}(0.55-0.025(\log_{10}n-16),0.30,0.55)$ |
 | 2 | 0.95 | $\operatorname{clamp}(0.70-0.025(\log_{10}n-18),0.30,0.70)$ |
+
+Int16 sieving retains its small segments. Int32 segments grow as the number
+of denominator visits per row falls: at segment start $L$, their active size
+is approximately $\max(B_{16},2L^2/u)$, capped at four times the natural
+segment heuristic and aligned to the stencil. Int32 S1 uses dynamic chunks
+of eight rows; compact S2 tasks remain at most $B_{16}$ entries. This reduces
+repeated worklist scans without enlarging the dense early segments. The
+Int32 buffers are released before the bridge or Loop 2 allocation.
 
 Fixed-parameter measurements on the 32-thread M3 Ultra (`nuRatio=0.9`,
 `u-factor=0.5`, segment cap $4\times10^{11}$) gave:
@@ -151,6 +160,8 @@ Options:
 
 - `--profile` (or `-p`): print a timing breakdown by computation phase, along with the parameter values used.
 - `--segment-cap <len>`: cap on stored sieve entries in the large-segment phase (default: 12000000000, about 12 GB — plus compressed-prefix state). The full sieve stores one entry per integer; the packed odd Loop 2 sieve stores one entry per odd integer and therefore covers roughly twice the integer span at the same cap. Larger caps mean fewer sieve passes but more memory; the value is rounded up to a multiple of the stencil period (13860). Raise it for very large inputs (the $10^{25}$ record run used $4 \times 10^{11}$) if you have the RAM; budget the full memory model in `INPUT_BOUNDS.md` before a $10^{26}$ run.
+- `--loop01-int32-segment-size <len>`: use a fixed Int32 Loop 0/1 segment size. The default `0` selects adaptive sizing. A positive value is rounded up to stencil alignment and clamped to the actual Int32 span; the final segment can be shorter. This does not change the Loop 2 cap.
+- `--s1-int32-chunk <rows>`: dynamic scheduling chunk for Int32 outer-Q6-family S1 rows (default: `8`, valid range: `1` through `INT_MAX`). Int16 and Loop 2 scheduling are unchanged.
 - `--u <value>`: set the sieve truncation point $u$ directly, bypassing the default formula. Must satisfy $0 < u < n$. Hard caps are enforced at runtime per build: $u \le 2.05 \times 10^{17}$ with the bucket scheduler (the default), and $u \lesssim 1.8 \times 10^{19}$ always (UInt32 primes / byte encoding). On `DIVISION_FREE=1` builds also keep $u < 2^{60} - 2^{32}$ (see `INPUT_BOUNDS.md` constraints 3-5). Larger $u$ shifts work from S1/S2 summation into sieving; smaller $u$ does the opposite.
 - `--u-factor <value>`: override the scaling factor in the $u$ formula: $u = \lceil \text{factor} \cdot (n / \ln \ln n)^{2/3} \rceil$. Must be positive. Without an override, the compiled P1/P2 mode uses the corresponding formula in the table above. Mutually exclusive with `--u`.
 - `--nu-ratio <value>`: override the S1/S2 split ratio. Without an override, P1/P2 uses $0.90/0.95$, respectively. Controls the boundary between the S1 (Mertens sum) and S2 (Möbius sum) ranges via $\nu(x) = \lfloor \text{ratio} \cdot \sqrt{x} \rfloor$. Must be positive. Affects only performance, not correctness.
